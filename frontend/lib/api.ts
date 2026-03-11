@@ -1,49 +1,41 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-async function fetchApi<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
-  return res.json();
-}
-
-export async function postApi<T>(path: string, body: unknown): Promise<T> {
+async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    cache: "no-store",
+    ...options,
+    headers: { "Content-Type": "application/json", ...options?.headers },
   });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
 
-import type {
-  ProjectsListResponse,
-  ProjectDetail,
-  MeddicSection,
-  TodoItem,
-  Recording,
-  ProjectSettings,
-  InboxListResponse,
-  RecordingDetail,
-  CallAnalysis,
-  CoachingData,
-  ProjectTemplate,
-  CreateProjectRequest,
-} from "./types";
-
 export const api = {
-  getTemplates: () => fetchApi<{ templates: ProjectTemplate[] }>("/api/templates"),
-  createProject: (body: CreateProjectRequest) => postApi<{ id: string }>("/api/projects", body),
-  getProjects: () => fetchApi<ProjectsListResponse>("/api/projects"),
-  getProjectDetail: (id: string) => fetchApi<ProjectDetail>(`/api/projects/${id}`),
-  getProjectMeddic: (id: string) => fetchApi<{ sections: MeddicSection[]; summary: string }>(`/api/projects/${id}/meddic`),
-  getProjectTodos: (id: string) => fetchApi<{ todos: TodoItem[] }>(`/api/projects/${id}/todos`),
-  getProjectRecordings: (id: string) => fetchApi<{ recordings: Recording[] }>(`/api/projects/${id}/recordings`),
-  getProjectSettings: (id: string) => fetchApi<ProjectSettings>(`/api/projects/${id}/settings`),
-  getInbox: () => fetchApi<InboxListResponse>("/api/inbox"),
-  getInboxRecording: (id: string) => fetchApi<RecordingDetail>(`/api/inbox/${id}`),
-  getRecordingAnalysis: (id: string) => fetchApi<CallAnalysis>(`/api/recordings/${id}`),
-  getCoaching: () => fetchApi<CoachingData>("/api/coaching"),
-  generateEmail: (todoId: string, body: unknown) => postApi<{ subject: string; body: string }>(`/api/todos/${todoId}/email`, body),
+  // Files
+  getFiles: () => fetchApi<import("./types").RecordingFile[]>("/api/files"),
+
+  // Sales
+  getSchedule: () => fetchApi<{ today: import("./types").ScheduleMeeting[]; tomorrow: import("./types").ScheduleMeeting[] }>("/api/sales/schedule"),
+
+  // Integrations
+  getCrmStatus: () => fetchApi<{ connected: boolean; provider?: string }>("/api/integrations/crm/status"),
+  connectCrm: (provider: string) => fetchApi<{ success: boolean }>("/api/integrations/crm/connect", { method: "POST", body: JSON.stringify({ provider }) }),
+  getCalendarStatus: () => fetchApi<{ connected: boolean; provider?: string }>("/api/integrations/calendar/status"),
+  connectCalendar: (provider: string) => fetchApi<{ success: boolean }>("/api/integrations/calendar/connect", { method: "POST", body: JSON.stringify({ provider }) }),
+
+  // Deals
+  getDeal: (id: string) => fetchApi<import("./types").Deal>(`/api/deals/${id}`),
+
+  // Schedule
+  getMeeting: (id: string) => fetchApi<import("./types").MeetingDetail>(`/api/schedule/${id}`),
+  startRecording: (id: string) => fetchApi<{ success: boolean }>(`/api/schedule/${id}/recording/start`, { method: "POST" }),
+  stopRecording: (id: string) => fetchApi<{ success: boolean }>(`/api/schedule/${id}/recording/stop`, { method: "POST" }),
+
+  // CRM Update
+  getUnsyncedRecordings: () => fetchApi<import("./types").UnsyncedRecording[]>("/api/crm-update/recordings"),
+  analyzeRecordings: (ids: string[]) => fetchApi<import("./types").CrmChangeProposal>("/api/crm-update/analyze", { method: "POST", body: JSON.stringify({ recording_ids: ids }) }),
+  confirmSection: (sessionId: string, category: string) => fetchApi<{ success: boolean }>("/api/crm-update/confirm", { method: "POST", body: JSON.stringify({ session_id: sessionId, category }) }),
+  confirmAll: (sessionId: string) => fetchApi<{ success: boolean }>("/api/crm-update/confirm-all", { method: "POST", body: JSON.stringify({ session_id: sessionId }) }),
+  saveChanges: (sessionId: string, sections: import("./types").CrmChangeSection[]) => fetchApi<{ success: boolean }>("/api/crm-update/changes", { method: "PUT", body: JSON.stringify({ session_id: sessionId, sections }) }),
+  applyChanges: (sessionId: string) => fetchApi<{ success: boolean }>("/api/crm-update/apply", { method: "POST", body: JSON.stringify({ session_id: sessionId }) }),
+  getUpdateStatus: (sessionId: string) => fetchApi<import("./types").CrmUpdateProgress>(`/api/crm-update/status?session_id=${sessionId}`),
 };

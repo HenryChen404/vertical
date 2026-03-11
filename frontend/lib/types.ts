@@ -1,206 +1,96 @@
-export interface Project {
+export interface RecordingFile {
   id: string;
-  company: string;
-  subtitle: string;
-  status: "negotiation" | "demo" | "proposal" | "closing" | "discovery";
-  dealValue: number;
-  reps: string;
-  aiInsight: string;
-  activity: string;
-  forecast: number;
+  title: string;
+  timestamp: string;
+  duration_seconds: number;
 }
 
-export interface ProjectDetail {
-  id: string;
-  company: string;
-  dealValue: number;
-  status: string;
-  recordings: number;
-  calls: number;
-  callsSummary: string;
-  meddicScore: number;
-  meddicTrend: string;
-  riskLevel: string;
-  riskTrend: string;
-  contacts: Contact[];
-  insights: Insight[];
-  riskSignals: RiskSignal[];
-}
-
-export interface Contact {
-  name: string;
-  role: string;
-  avatar?: string;
-}
-
-export interface Insight {
-  icon: string;
-  text: string;
-  date: string;
-}
-
-export interface RiskSignal {
-  icon: string;
+export interface CrmTag {
   label: string;
-  detail: string;
-  status: "resolved" | "warning" | "critical";
+  type: "account" | "opportunity" | "contact";
 }
 
-export interface MeddicSection {
-  key: string;
-  title: string;
-  icon: string;
-  score: number;
-  content: string;
-}
-
-export interface TodoItem {
+export interface ScheduleMeeting {
   id: string;
+  time_start: string;
+  time_end: string;
   title: string;
-  fromRecording?: string;
-  dueDate: string;
-  tags: { label: string; color: string }[];
-  assignee?: string;
-  linkedItems?: string;
-  action: string;
-  completed: boolean;
+  crm_tags: CrmTag[];
+  date_group: string;
+  feedback_label?: string;
 }
 
-export interface Recording {
-  id: string;
-  title: string;
-  subtitle: string;
-  date: string;
-  duration: string;
-  score?: number;
-  participants?: number;
-}
-
-export interface InboxRecording {
-  id: string;
-  title: string;
-  subtitle: string;
-  duration: string;
-  assignedTo: string;
-  status: "assigned" | "processing" | "unassigned";
-}
-
-export interface TranscriptEntry {
-  speaker: string;
-  time: string;
-  text: string;
-}
-
-export interface RecordingDetail {
-  id: string;
-  title: string;
-  date: string;
-  duration: string;
-  participants: number;
-  assignedProject?: string;
-  summary: string;
-  keyPoints: { text: string; tag: string }[];
-  nextSteps: string;
-  transcript: TranscriptEntry[];
-}
-
-export interface CallAnalysis {
-  id: string;
-  title: string;
-  date: string;
-  duration: string;
-  participants: number;
-  talkRatio: { rep: number; customer: number };
-  keyTopics: { label: string; percentage?: number }[];
-  analysis: string;
-  callScore: number;
-  metrics: { label: string; value: string; score: number }[];
-  riskSignals: string[];
-  keyDiscussionPoints: { text: string; tag: string }[];
-  transcript: TranscriptEntry[];
-}
-
-export interface CoachingData {
-  totalScore: number;
-  scoreTrend: string;
-  callsAnalyzed: number;
-  callsTrend: string;
-  topStrength: string;
-  topStrengthDetail: string;
-  focusArea: string;
-  focusAreaDetail: string;
-  objections: ObjectionCard[];
-}
-
-export interface ObjectionCard {
-  title: string;
-  score: number;
-  strengths: string;
-  areasToImprove: string;
-  practicePrompt: string;
-}
-
-export interface ConnectedApp {
-  name: string;
-  description: string;
-  icon: string;
-  connected: boolean;
-}
-
-export interface AiSkill {
-  name: string;
-  description: string;
-  icon: string;
-  enabled: boolean;
-}
-
-export interface ProjectSettings {
-  connectedApps: ConnectedApp[];
-  aiSkills: AiSkill[];
-  metrics: { label: string; value: string; trend: string }[];
-}
-
-export interface ProjectTemplate {
+export interface Person {
   id: string;
   name: string;
-  description: string;
-  icon: string;
-  badge?: string;
-  comingSoon?: boolean;
-  skills: AiSkill[];
-  apps: ConnectedApp[];
+  title: string;
+  avatar_url?: string;
 }
 
-export interface CreateProjectRequest {
-  templateId?: string;
+export interface Deal {
+  id: string;
   name: string;
+  org_name: string;
+  sector: string;
+  amount: string;
+  stage: string;
+  close_date: string;
+  persons: Person[];
+  meetings: { id: string; title: string; date: string }[];
+  recordings: { id: string; title: string; date: string; duration: string }[];
+}
+
+export interface Attendee {
+  id: string;
+  name: string;
+  title: string;
   company: string;
-  status: string;
-  dealValue?: number;
-  description?: string;
-  skills: { name: string; enabled: boolean }[];
-  apps: { name: string; connected: boolean }[];
-  customPrompt?: string;
+  avatar_url?: string;
 }
 
-export interface ProjectsListResponse {
-  projects: Project[];
-  metrics: {
-    totalPipeline: string;
-    activeDeals: number;
-    atRisk: number;
-    forecastEv: string;
-  };
-  pagination: { page: number; totalPages: number };
+export interface MeetingDetail {
+  id: string;
+  title: string;
+  date: string;
+  time_start: string;
+  time_end: string;
+  location: string;
+  account: { name: string; sector: string };
+  opportunity: { name: string; amount: string; stage: string };
+  attendees: Attendee[];
+  feedback: string;
+  linked_files: { id: string; title: string; duration: string }[];
 }
 
-export interface InboxListResponse {
-  recordings: InboxRecording[];
-  metrics: {
-    recordingsCount: number;
-    thisWeek: number;
-    avgDuration: string;
-    processing: number;
-  };
-  pagination: { page: number; totalPages: number };
+export interface FieldChange {
+  field: string;
+  old_value: string;
+  new_value: string;
+}
+
+export interface CrmChangeSection {
+  category: string;
+  fields: FieldChange[];
+  confirmed: boolean;
+}
+
+export interface CrmChangeProposal {
+  session_id: string;
+  recording_title: string;
+  sections: CrmChangeSection[];
+}
+
+export interface CrmUpdateProgress {
+  total: number;
+  completed: number;
+  current_item: string;
+  status: "processing" | "done";
+}
+
+export interface UnsyncedRecording {
+  id: string;
+  title: string;
+  date: string;
+  duration: string;
+  selected: boolean;
 }
