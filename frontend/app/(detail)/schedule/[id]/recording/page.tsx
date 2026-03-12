@@ -52,6 +52,7 @@ export default function RecordingPage() {
     eventSourceRef.current?.close();
     await api.stopRecording(id);
     setRecording(false);
+    router.push(`/schedule/${id}`);
   };
 
   // Elapsed timer

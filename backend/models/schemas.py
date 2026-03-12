@@ -65,6 +65,7 @@ class Deal(BaseModel):
 class AccountInfo(BaseModel):
     name: str
     sector: str
+    deal_id: Optional[str] = None
 
 
 class OpportunityInfo(BaseModel):
@@ -137,3 +138,9 @@ class CrmUpdateProgress(BaseModel):
 class IntegrationStatus(BaseModel):
     connected: bool
     provider: Optional[str] = None
+
+
+class ConnectionInitResponse(BaseModel):
+    redirect_url: Optional[str] = None
+    connected_account_id: Optional[str] = None
+    success: Optional[bool] = None

@@ -12,7 +12,12 @@ export default function CalendarOnboardingPage() {
   const handleConnect = async (provider: string) => {
     setConnecting(provider);
     try {
-      await api.connectCalendar(provider);
+      const redirectUrl = `${window.location.origin}/sales/connect?provider=${provider}`;
+      const result = await api.initiateConnection(provider, redirectUrl);
+      if (result.redirect_url) {
+        window.location.href = result.redirect_url;
+        return;
+      }
       router.push("/sales");
     } catch {
       setConnecting(null);

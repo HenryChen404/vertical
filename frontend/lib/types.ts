@@ -55,7 +55,7 @@ export interface MeetingDetail {
   time_start: string;
   time_end: string;
   location: string;
-  account: { name: string; sector: string };
+  account: { name: string; sector: string; deal_id?: string };
   opportunity: { name: string; amount: string; stage: string };
   attendees: Attendee[];
   feedback: string;
@@ -85,6 +85,32 @@ export interface CrmUpdateProgress {
   completed: number;
   current_item: string;
   status: "processing" | "done";
+}
+
+export interface EventSource {
+  source: "google_calendar" | "outlook_calendar" | "salesforce";
+  source_id: string;
+}
+
+export interface EventAttendee {
+  email: string;
+  name: string;
+  role?: string;
+}
+
+export interface CalendarEvent {
+  id: string;
+  title: string;
+  start_time: string;
+  end_time: string;
+  location: string | null;
+  description: string | null;
+  attendees: EventAttendee[];
+  related_deal: string | null;
+  merge_key: string;
+  created_at: string;
+  updated_at: string;
+  event_sources: EventSource[];
 }
 
 export interface UnsyncedRecording {

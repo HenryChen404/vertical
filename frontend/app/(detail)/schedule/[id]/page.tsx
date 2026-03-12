@@ -39,11 +39,19 @@ export default function ScheduleDetailPage() {
 
         {/* CRM Cards */}
         <div className="flex gap-3">
-          <div className="flex-1 bg-white rounded-2xl p-4 space-y-1">
-            <p className="text-[11px] text-[#888] uppercase tracking-wide">Account</p>
-            <p className="text-[15px] font-semibold">{meeting.account.name}</p>
-            <p className="text-[13px] text-[#888]">{meeting.account.sector}</p>
-          </div>
+          {meeting.account.deal_id ? (
+            <Link href={`/deals/${meeting.account.deal_id}`} className="flex-1 bg-white rounded-2xl p-4 space-y-1">
+              <p className="text-[11px] text-[#888] uppercase tracking-wide">Account</p>
+              <p className="text-[15px] font-semibold">{meeting.account.name}</p>
+              <p className="text-[13px] text-[#888]">{meeting.account.sector}</p>
+            </Link>
+          ) : (
+            <div className="flex-1 bg-white rounded-2xl p-4 space-y-1">
+              <p className="text-[11px] text-[#888] uppercase tracking-wide">Account</p>
+              <p className="text-[15px] font-semibold">{meeting.account.name}</p>
+              <p className="text-[13px] text-[#888]">{meeting.account.sector}</p>
+            </div>
+          )}
           <div className="flex-1 bg-white rounded-2xl p-4 space-y-1">
             <p className="text-[11px] text-[#888] uppercase tracking-wide">Opportunity</p>
             <p className="text-[15px] font-semibold">{meeting.opportunity.name}</p>

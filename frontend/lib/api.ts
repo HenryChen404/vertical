@@ -18,9 +18,27 @@ export const api = {
 
   // Integrations
   getCrmStatus: () => fetchApi<{ connected: boolean; provider?: string }>("/api/integrations/crm/status"),
-  connectCrm: (provider: string) => fetchApi<{ success: boolean }>("/api/integrations/crm/connect", { method: "POST", body: JSON.stringify({ provider }) }),
   getCalendarStatus: () => fetchApi<{ connected: boolean; provider?: string }>("/api/integrations/calendar/status"),
-  connectCalendar: (provider: string) => fetchApi<{ success: boolean }>("/api/integrations/calendar/connect", { method: "POST", body: JSON.stringify({ provider }) }),
+  initiateConnection: (provider: string, redirectUrl: string) =>
+    fetchApi<{ redirect_url?: string; connected_account_id?: string; success?: boolean }>(
+      "/api/integrations/connect",
+      { method: "POST", body: JSON.stringify({ provider, redirect_url: redirectUrl }) },
+    ),
+  disconnectProvider: (provider: string) =>
+    fetchApi<{ success: boolean; deleted?: number }>(
+      "/api/integrations/disconnect",
+      { method: "POST", body: JSON.stringify({ provider }) },
+    ),
+
+  // Events (real calendar data)
+  syncEvents: (daysAhead = 7) =>
+    fetchApi<{ fetched: number; merged: number; created: number; updated: number }>(
+      `/api/sales/events/sync?days_ahead=${daysAhead}`,
+      { method: "POST" },
+    ),
+  getEvents: (range: "today" | "tomorrow" | "week" = "week") =>
+    fetchApi<{ events: import("./types").CalendarEvent[] }>(`/api/sales/events?range=${range}`),
+  getEvent: (id: string) => fetchApi<import("./types").CalendarEvent>(`/api/sales/events/${id}`),
 
   // Deals
   getDeal: (id: string) => fetchApi<import("./types").Deal>(`/api/deals/${id}`),
