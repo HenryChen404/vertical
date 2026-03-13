@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from adapters.base import NormalizedEvent
 from adapters.google_calendar import GoogleCalendarAdapter
+from adapters.salesforce import SalesforceAdapter
 from services.merge import compute_merge_key, find_merge_candidate, merge_attendees
 from services.supabase import get_supabase
 
@@ -13,8 +14,8 @@ logger = logging.getLogger(__name__)
 # All adapters to pull from
 ADAPTERS = [
     GoogleCalendarAdapter(),
+    SalesforceAdapter(),
     # OutlookCalendarAdapter(),
-    # SalesforceAdapter(),
 ]
 
 

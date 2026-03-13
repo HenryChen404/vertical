@@ -29,6 +29,10 @@ export const api = {
       "/api/integrations/disconnect",
       { method: "POST", body: JSON.stringify({ provider }) },
     ),
+  verifyApiAccess: (provider: string) =>
+    fetchApi<{ api_enabled: boolean; error?: string; mock?: boolean }>(
+      `/api/integrations/${provider}/verify-api`,
+    ),
 
   // Events (real calendar data)
   syncEvents: (daysAhead = 7) =>

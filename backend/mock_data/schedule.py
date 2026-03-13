@@ -6,7 +6,7 @@ MEETINGS = {
         "time_start": "10:00 AM",
         "time_end": "11:00 AM",
         "location": "Zoom - Meeting Room A",
-        "account": {"name": "Acme Corporation", "sector": "Technology"},
+        "account": {"name": "Acme Corporation", "sector": "Technology", "deal_id": "d1"},
         "opportunity": {
             "name": "Enterprise Deal",
             "amount": "$120,000",

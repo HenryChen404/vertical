@@ -55,10 +55,12 @@ export default function IntegrationsPage() {
 function IntegrationsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const [loading, setLoading] = useState(true);
   const [connected, setConnected] = useState<Set<string>>(new Set());
   const [connecting, setConnecting] = useState<string | null>(null);
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
   const [verifying, setVerifying] = useState<string | null>(null);
+  const [apiError, setApiError] = useState<Record<string, string>>({});
 
   // Check existing connection status on mount
   useEffect(() => {
@@ -82,6 +84,8 @@ function IntegrationsContent() {
         if (ids.size > 0) setConnected(ids);
       } catch {
         // ignore
+      } finally {
+        setLoading(false);
       }
     }
     checkStatus();
@@ -108,8 +112,29 @@ function IntegrationsContent() {
         const status = await statusFn();
         if (status.connected || attempts >= maxAttempts) {
           setConnected((prev) => new Set([...prev, match.id]));
-          setVerifying(null);
           clearInterval(interval);
+
+          // Verify API access after connection confirmed
+          try {
+            const verify = await api.verifyApiAccess(match.provider);
+            if (!verify.api_enabled) {
+              // Auto-disconnect and revert to Connect state
+              await api.disconnectProvider(match.provider);
+              setConnected((prev) => {
+                const next = new Set(prev);
+                next.delete(match.id);
+                return next;
+              });
+              setApiError((prev) => ({
+                ...prev,
+                [match.id]: verify.error || "API is not enabled for this organization.",
+              }));
+            }
+          } catch {
+            // Verification failed, don't block — just skip
+          }
+
+          setVerifying(null);
           router.replace("/integration");
         }
       } catch {
@@ -138,6 +163,24 @@ function IntegrationsContent() {
       // Fallback mock mode
       if (result.success) {
         setConnected((prev) => new Set([...prev, item.id]));
+        // Verify API access
+        try {
+          const verify = await api.verifyApiAccess(item.provider);
+          if (!verify.api_enabled) {
+            await api.disconnectProvider(item.provider);
+            setConnected((prev) => {
+              const next = new Set(prev);
+              next.delete(item.id);
+              return next;
+            });
+            setApiError((prev) => ({
+              ...prev,
+              [item.id]: verify.error || "API is not enabled for this organization.",
+            }));
+          }
+        } catch {
+          // skip
+        }
       }
     } catch {
       // ignore
@@ -153,6 +196,11 @@ function IntegrationsContent() {
       setConnected((prev) => {
         const next = new Set(prev);
         next.delete(item.id);
+        return next;
+      });
+      setApiError((prev) => {
+        const next = { ...prev };
+        delete next[item.id];
         return next;
       });
     } catch {
@@ -173,12 +221,14 @@ function IntegrationsContent() {
           const isConnecting = connecting === item.id;
           const isDisconnecting = disconnecting === item.id;
           const isVerifying = verifying === item.id;
+          const itemApiError = apiError[item.id];
 
           return (
             <div
               key={item.id}
-              className="bg-white rounded-[5px] flex gap-3 items-start px-4 py-3"
+              className="bg-white rounded-[5px] flex flex-col px-4 py-3"
             >
+              <div className="flex gap-3 items-start">
               {/* Icon */}
               <div className="w-8 h-8 rounded-[4px] border border-[#EBEBEB] overflow-hidden flex-shrink-0 flex items-center justify-center bg-white">
                 <img
@@ -194,7 +244,9 @@ function IntegrationsContent() {
                   <p className="text-[16px] leading-6 text-[#3D3D3D]">
                     {item.label}
                   </p>
-                  {isVerifying ? (
+                  {loading ? (
+                    <span className="text-[14px] leading-5 text-[#7A7A7A]">—</span>
+                  ) : isVerifying ? (
                     <span className="text-[14px] leading-5 text-[#7A7A7A]">
                       Verifying...
                     </span>
@@ -226,6 +278,14 @@ function IntegrationsContent() {
                   {item.description}
                 </p>
               </div>
+              </div>
+              {itemApiError && (
+                <div className="mt-2 px-2 py-2 bg-[#FFF3F3] rounded-[4px]">
+                  <p className="text-[13px] leading-[18px] text-[#D32F2F]">
+                    API is not enabled for this organization. Please use a Salesforce Developer or Enterprise edition.
+                  </p>
+                </div>
+              )}
             </div>
           );
         })}

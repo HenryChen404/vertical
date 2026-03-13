@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { ChevronDown, User } from "lucide-react";
 
@@ -25,17 +26,14 @@ function SearchAiIcon() {
 
 function PlaudDeviceIcon() {
   return (
-    <div className="relative w-[18px] h-[22px]">
-      <div className="w-full h-full rounded-[3px] border border-black bg-white" />
-      <div className="absolute left-[-4px] top-[3px] w-[3px] h-[16px] bg-[#22C55E] rounded-sm" />
-    </div>
+    <Image src="/icons/device.svg" alt="PLAUD device" width={36} height={36} className="-ml-1.5" />
   );
 }
 
 export function NavBar() {
   return (
     <div className="flex items-center justify-between px-6 h-11">
-      <div className="flex items-center gap-1.5 px-2 py-1 rounded-[6px]">
+      <div className="flex items-center gap-1.5 rounded-[6px]">
         <PlaudDeviceIcon />
         <ChevronDown className="w-[14px] h-[14px]" strokeWidth={2} />
       </div>

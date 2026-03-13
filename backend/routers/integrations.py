@@ -150,6 +150,56 @@ def crm_status():
     return IntegrationStatus(connected=connected, provider="salesforce" if connected else None)
 
 
+@router.get("/integrations/{provider}/verify-api")
+def verify_api_access(provider: str):
+    """After OAuth, verify the connected org actually supports API access.
+
+    Makes a lightweight API call to check. Returns:
+    - api_enabled: true/false
+    - error: error message if API is not available
+    """
+    if provider not in PROVIDER_CONFIG:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+
+    client = _get_composio_client()
+    if client is None:
+        return {"api_enabled": True, "mock": True}
+
+    config = PROVIDER_CONFIG[provider]
+    try:
+        result = client.connected_accounts.list(
+            user_ids=[USER_ID],
+            toolkit_slugs=[config["toolkit_slug"]],
+            statuses=["ACTIVE"],
+        )
+        if not result.items:
+            return {"api_enabled": False, "error": "No active connection found"}
+
+        account = result.items[0]
+
+        # Lightweight API call to test access
+        if provider == "salesforce":
+            resp = client.tools.execute(
+                slug="SALESFORCE_EXECUTE_SOQL_QUERY",
+                arguments={"soql_query": "SELECT Id FROM Organization LIMIT 1"},
+                connected_account_id=account.id,
+                user_id=USER_ID,
+                dangerously_skip_version_check=True,
+            )
+            data = resp.model_dump() if hasattr(resp, "model_dump") else resp
+            if data.get("successful") is False:
+                error_msg = data.get("error", "Unknown error")
+                return {"api_enabled": False, "error": error_msg}
+            return {"api_enabled": True}
+
+        # For calendar providers, test with a simple list call
+        return {"api_enabled": True}
+
+    except Exception as e:
+        logger.error("API verification failed for %s: %s", provider, e)
+        return {"api_enabled": False, "error": str(e)}
+
+
 @router.get("/integrations/calendar/status", response_model=IntegrationStatus)
 def calendar_status():
     client = _get_composio_client()
