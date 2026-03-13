@@ -212,7 +212,7 @@ function IntegrationsContent() {
 
   return (
     <div className="flex flex-col flex-1 overflow-auto bg-[#F9F9F9]">
-      <BackHeader title="Integrations" />
+      <BackHeader title="Integrations" fallbackHref="/explore" />
 
       <div className="flex flex-col gap-4 px-6 pt-6">
         {/* Integration cards */}
