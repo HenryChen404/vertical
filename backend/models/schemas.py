@@ -147,3 +147,21 @@ class ConnectionInitResponse(BaseModel):
     redirect_url: Optional[str] = None
     connected_account_id: Optional[str] = None
     success: Optional[bool] = None
+
+
+class RecordingResponse(BaseModel):
+    id: str
+    event_id: str
+    title: Optional[str] = None
+    duration_seconds: Optional[int] = None
+    file_size_bytes: Optional[int] = None
+    storage_path: str
+    transcript: list = []
+    created_at: str
+
+
+class LinkedFileResponse(BaseModel):
+    id: str
+    event_id: str
+    plaud_file_id: str
+    created_at: str
