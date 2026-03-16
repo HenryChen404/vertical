@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
+import os
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from adapters.base import NormalizedEvent
 from adapters.google_calendar import GoogleCalendarAdapter
@@ -27,6 +30,24 @@ _google_adapter = GoogleCalendarAdapter()
 _salesforce_adapter = SalesforceAdapter()
 
 
+def _verify_webhook_signature(body: bytes, signature_header: str | None) -> bool:
+    """Verify Composio webhook HMAC-SHA256 signature.
+
+    Returns True if valid or if no secret is configured (local dev).
+    """
+    secret = os.getenv("COMPOSIO_WEBHOOK_SECRET")
+    if not secret:
+        # No secret configured — skip verification (local dev)
+        return True
+    if not signature_header:
+        logger.warning("Webhook request missing signature header")
+        return False
+    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    # Composio may send signature as "v1,<hex>" or plain hex
+    actual = signature_header.split(",")[-1].strip()
+    return hmac.compare_digest(expected, actual)
+
+
 @router.post("/webhooks/composio")
 async def composio_webhook(request: Request):
     """Handle Composio webhook for incremental event updates.
@@ -38,6 +59,12 @@ async def composio_webhook(request: Request):
 
     For calendar triggers, data contains the calendar event info.
     """
+    # Verify signature if COMPOSIO_WEBHOOK_SECRET is set
+    raw_body = await request.body()
+    signature = request.headers.get("webhook-signature")
+    if not _verify_webhook_signature(raw_body, signature):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+
     body = await request.json()
     event_type = body.get("event_type", body.get("type", "unknown"))
     data = body.get("data", body.get("payload", {}))
