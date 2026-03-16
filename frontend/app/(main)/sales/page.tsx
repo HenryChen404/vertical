@@ -165,11 +165,21 @@ export default function SalesPage() {
   const [unsyncedCount, setUnsyncedCount] = useState(0);
 
   useEffect(() => {
-    // Just read from events table — data is populated by initial sync + webhooks
     async function loadEvents() {
       try {
         const { events: data } = await api.getEvents("week");
-        setEvents(data);
+        if (data.length === 0) {
+          // No events yet — trigger sync in case data hasn't been pulled
+          try {
+            await api.syncEvents(7);
+            const { events: refreshed } = await api.getEvents("week");
+            setEvents(refreshed);
+          } catch {
+            setEvents(data);
+          }
+        } else {
+          setEvents(data);
+        }
       } catch (e) {
         console.error("Failed to load events:", e);
       } finally {

@@ -101,18 +101,12 @@ function SalesConnectContent() {
       try {
         const statusFn = match.isCalendar ? api.getCalendarStatus : api.getCrmStatus;
         const status = await statusFn();
-        if (status.connected) {
+        if (status.connected || attempts >= maxAttempts) {
           setConnected((prev) => new Set([...prev, match.id]));
           setVerifying(null);
           clearInterval(interval);
-          // Trigger initial sync after first authorization
-          api.syncEvents(7).catch(console.error);
-          router.replace("/sales");
-        } else if (attempts >= maxAttempts) {
-          setConnected((prev) => new Set([...prev, match.id]));
-          setVerifying(null);
-          clearInterval(interval);
-          api.syncEvents(7).catch(console.error);
+          // Trigger initial sync and wait before navigating
+          try { await api.syncEvents(7); } catch {}
           router.replace("/sales");
         }
       } catch {
