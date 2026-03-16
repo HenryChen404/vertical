@@ -18,6 +18,7 @@ class SalesforceAdapter(BaseAdapter):
     def _get_client_and_account(self):
         """Return (Composio client, connected_account) or (None, None)."""
         if not self.api_key:
+            logger.info("SalesforceAdapter: no COMPOSIO_API_KEY")
             return None, None
         from composio import Composio
         client = Composio(api_key=self.api_key)
@@ -26,6 +27,7 @@ class SalesforceAdapter(BaseAdapter):
             toolkit_slugs=["salesforce"],
             statuses=["ACTIVE"],
         )
+        logger.info("SalesforceAdapter: found %d active connections", len(result.items))
         if not result.items:
             return client, None
         return client, result.items[0]
@@ -73,11 +75,14 @@ class SalesforceAdapter(BaseAdapter):
             "LIMIT 100"
         )
 
+        logger.info("SalesforceAdapter SOQL: %s", soql)
         raw_data = self._execute_soql(client, connected_account, soql)
         if raw_data is None:
+            logger.warning("SalesforceAdapter: main SOQL returned None, trying simple query")
             return await self._fetch_simple(client, connected_account, time_min_str, time_max_str)
 
         records = raw_data.get("records", raw_data.get("items", []))
+        logger.info("SalesforceAdapter: SOQL returned %d records", len(records))
 
         # Fetch related entities in bulk
         related = self._fetch_related_entities(client, connected_account, records)

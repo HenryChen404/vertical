@@ -28,12 +28,16 @@ async def sync_events(days_ahead: int = 7) -> dict:
     all_normalized: list[NormalizedEvent] = []
     for adapter in ADAPTERS:
         try:
+            logger.info("Sync: fetching from %s (range %s to %s)",
+                        type(adapter).__name__, time_min.isoformat(), time_max.isoformat())
             events = await adapter.fetch_events(time_min, time_max)
+            logger.info("Sync: %s returned %d events", type(adapter).__name__, len(events))
             all_normalized.extend(events)
         except Exception as e:
             logger.error("Adapter %s failed: %s", type(adapter).__name__, e)
 
     if not all_normalized:
+        logger.info("Sync: no events from any adapter, nothing to do")
         return {"fetched": 0, "merged": 0, "created": 0, "updated": 0}
 
     db = get_supabase()
