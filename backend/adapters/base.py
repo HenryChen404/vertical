@@ -16,6 +16,7 @@ class NormalizedEvent(BaseModel):
     location: str | None = None
     related_deal: str | None = None
     raw_data: dict = {}
+    sales_details: dict | None = None
 
 
 class BaseAdapter(ABC):

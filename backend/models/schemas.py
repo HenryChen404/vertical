@@ -65,6 +65,7 @@ class Deal(BaseModel):
 class AccountInfo(BaseModel):
     name: str
     sector: str
+    annual_revenue: Optional[str] = None
     deal_id: Optional[str] = None
 
 
@@ -72,14 +73,16 @@ class OpportunityInfo(BaseModel):
     name: str
     amount: str
     stage: str
+    close_date: Optional[str] = None
 
 
 class Attendee(BaseModel):
     id: str
     name: str
-    title: str
-    company: str
+    title: str = ""
+    company: str = ""
     avatar_url: Optional[str] = None
+    status: Optional[str] = None
 
 
 class LinkedFile(BaseModel):
@@ -94,12 +97,12 @@ class MeetingDetail(BaseModel):
     date: str
     time_start: str
     time_end: str
-    location: str
-    account: AccountInfo
-    opportunity: OpportunityInfo
-    attendees: list[Attendee]
-    feedback: str
-    linked_files: list[LinkedFile]
+    location: str = ""
+    account: Optional[AccountInfo] = None
+    opportunity: Optional[OpportunityInfo] = None
+    attendees: list[Attendee] = []
+    feedback: str = ""
+    linked_files: list[LinkedFile] = []
 
 
 class UnsyncedRecording(BaseModel):

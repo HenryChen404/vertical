@@ -57,7 +57,7 @@ async def sync_events(days_ahead: int = 7) -> dict:
         if source_resp.data:
             # Update existing source + merged event
             source_row = source_resp.data[0]
-            db.table("events").update({
+            update_data = {
                 "title": event.title,
                 "start_time": event.start_time.isoformat(),
                 "end_time": event.end_time.isoformat(),
@@ -65,7 +65,10 @@ async def sync_events(days_ahead: int = 7) -> dict:
                 "description": event.description,
                 "attendees": event.attendees,
                 "related_deal": event.related_deal,
-            }).eq("id", source_row["event_id"]).execute()
+            }
+            if event.sales_details is not None:
+                update_data["sales_details"] = event.sales_details
+            db.table("events").update(update_data).eq("id", source_row["event_id"]).execute()
 
             db.table("event_sources").update({
                 "raw_data": event.raw_data,
@@ -81,12 +84,17 @@ async def sync_events(days_ahead: int = 7) -> dict:
         if candidate:
             # Merge into existing event
             merged_attendees = merge_attendees(candidate.get("attendees") or [], event.attendees)
-            db.table("events").update({
+            merge_update = {
                 "attendees": merged_attendees,
                 "description": event.description or candidate.get("description"),
                 "location": event.location or candidate.get("location"),
                 "related_deal": event.related_deal or candidate.get("related_deal"),
-            }).eq("id", candidate["id"]).execute()
+            }
+            if event.sales_details is not None:
+                merge_update["sales_details"] = event.sales_details
+            elif candidate.get("sales_details"):
+                merge_update["sales_details"] = candidate["sales_details"]
+            db.table("events").update(merge_update).eq("id", candidate["id"]).execute()
 
             # Add source link
             db.table("event_sources").insert({
@@ -99,7 +107,7 @@ async def sync_events(days_ahead: int = 7) -> dict:
             updated += 1
         else:
             # Create new merged event
-            insert_resp = db.table("events").insert({
+            insert_data = {
                 "title": event.title,
                 "start_time": event.start_time.isoformat(),
                 "end_time": event.end_time.isoformat(),
@@ -108,7 +116,10 @@ async def sync_events(days_ahead: int = 7) -> dict:
                 "attendees": event.attendees,
                 "related_deal": event.related_deal,
                 "merge_key": merge_key,
-            }).execute()
+            }
+            if event.sales_details is not None:
+                insert_data["sales_details"] = event.sales_details
+            insert_resp = db.table("events").insert(insert_data).execute()
 
             merged_id = insert_resp.data[0]["id"]
 
