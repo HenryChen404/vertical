@@ -4,7 +4,7 @@ load_dotenv()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import files, sales, deals, schedule, crm_update, integrations, events, webhooks
+from routers import files, sales, deals, schedule, crm_update, integrations, events, webhooks, recordings, linked_files
 
 app = FastAPI(title="PLAUD API")
 
@@ -24,6 +24,8 @@ app.include_router(crm_update.router, prefix="/api")
 app.include_router(integrations.router, prefix="/api")
 app.include_router(events.router, prefix="/api")
 app.include_router(webhooks.router, prefix="/api")
+app.include_router(recordings.router, prefix="/api")
+app.include_router(linked_files.router, prefix="/api")
 
 
 @app.get("/api/health")

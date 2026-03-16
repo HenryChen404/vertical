@@ -45,7 +45,40 @@ def _format_time(iso_str: str) -> str:
         return iso_str
 
 
-def _transform_event_to_meeting_detail(event: dict) -> dict:
+def _format_duration(seconds) -> str:
+    """Format seconds to mm:ss string."""
+    if not seconds:
+        return "0:00"
+    m, s = divmod(int(seconds), 60)
+    return f"{m}:{s:02d}"
+
+
+def _fetch_linked_files(db, event_id: str) -> list[dict]:
+    """Fetch recordings and linked PLAUD files for an event."""
+    # Local recordings
+    rec_resp = db.table("recordings").select("*").eq("event_id", event_id).order("created_at").execute()
+    # Linked PLAUD files
+    link_resp = db.table("event_file_links").select("*").eq("event_id", event_id).order("created_at").execute()
+
+    files = []
+    for r in rec_resp.data or []:
+        files.append({
+            "id": r["id"],
+            "title": r.get("title") or "Recording",
+            "duration": _format_duration(r.get("duration_seconds")),
+            "type": "local",
+        })
+    for l in link_resp.data or []:
+        files.append({
+            "id": l["id"],
+            "title": "PLAUD File",
+            "plaud_file_id": l["plaud_file_id"],
+            "type": "plaud",
+        })
+    return files
+
+
+def _transform_event_to_meeting_detail(event: dict, db=None) -> dict:
     """Transform a Supabase event row into MeetingDetail response format."""
     sales = event.get("sales_details") or {}
 
@@ -102,7 +135,7 @@ def _transform_event_to_meeting_detail(event: dict) -> dict:
         "opportunity": opportunity,
         "attendees": attendees,
         "feedback": "",
-        "linked_files": [],
+        "linked_files": _fetch_linked_files(db, event["id"]) if db else [],
     }
 
 
@@ -115,7 +148,7 @@ def get_meeting(meeting_id: str):
             "*, event_sources(source, source_id)"
         ).eq("id", meeting_id).single().execute()
         if resp.data:
-            return _transform_event_to_meeting_detail(resp.data)
+            return _transform_event_to_meeting_detail(resp.data, db=db)
     except Exception:
         pass
 

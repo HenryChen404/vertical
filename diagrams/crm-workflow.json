@@ -1,0 +1,34 @@
+{
+  "title": "CRM Update Workflow",
+  "direction": "horizontal",
+  "nodes": [
+    { "id": "select", "label": "User Selects\nRecordings", "type": "start", "color": "#ffd43b" },
+    { "id": "create", "label": "Create Workflow\n+ Tasks", "type": "process", "color": "#a5d8ff" },
+    { "id": "plaud", "label": "PLAUD\nTranscribe", "type": "io", "color": "#ffec99" },
+    { "id": "dots", "label": "···", "type": "io", "color": "#e9ecef" },
+    { "id": "whisper", "label": "Whisper\nTranscribe", "type": "io", "color": "#ffec99" },
+    { "id": "all_done", "label": "All Done?", "type": "decision", "color": "#ffec99" },
+    { "id": "extract", "label": "Extract\n(parallel)", "type": "process", "color": "#d0bfff" },
+    { "id": "review", "label": "Human Review\n(chat)", "type": "process", "color": "#b2f2bb" },
+    { "id": "satisfied", "label": "Confirmed?", "type": "decision", "color": "#b2f2bb" },
+    { "id": "re_extract", "label": "Re-extract", "type": "process", "color": "#d0bfff" },
+    { "id": "push", "label": "Push to\nSalesforce", "type": "process", "color": "#ffc9c9" },
+    { "id": "done", "label": "Done", "type": "end", "color": "#b2f2bb" }
+  ],
+  "edges": [
+    { "from": "select", "to": "create" },
+    { "from": "create", "to": "plaud" },
+    { "from": "create", "to": "dots" },
+    { "from": "create", "to": "whisper" },
+    { "from": "plaud", "to": "all_done" },
+    { "from": "dots", "to": "all_done" },
+    { "from": "whisper", "to": "all_done" },
+    { "from": "all_done", "to": "extract", "label": "Yes" },
+    { "from": "extract", "to": "review" },
+    { "from": "review", "to": "satisfied" },
+    { "from": "satisfied", "to": "push", "label": "Yes" },
+    { "from": "satisfied", "to": "re_extract", "label": "No" },
+    { "from": "re_extract", "to": "review" },
+    { "from": "push", "to": "done" }
+  ]
+}
