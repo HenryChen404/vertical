@@ -44,14 +44,14 @@ async def composio_webhook(request: Request):
 
     logger.info("Composio webhook: type=%s", event_type)
 
-    # Route based on event type
-    if "deleted" in event_type or "cancelled" in event_type or "removed" in event_type:
+    # Route based on event type — check "trigger" first since trigger
+    # event_types like "trigger.instance.updated" also match "updated"
+    if "trigger" in event_type:
+        return await _handle_trigger_event(data)
+    elif "deleted" in event_type or "cancelled" in event_type or "removed" in event_type:
         return await _handle_delete(data)
     elif "created" in event_type or "updated" in event_type or "modified" in event_type:
         return await _handle_upsert(data)
-    elif "trigger" in event_type:
-        # Trigger events carry calendar event data — could be any CRUD
-        return await _handle_trigger_event(data)
     else:
         # Fallback: full sync for unknown event types
         logger.info("Unknown webhook type '%s', triggering full sync", event_type)
@@ -74,6 +74,9 @@ async def _handle_upsert(data: dict) -> dict:
         result = await sync_events(days_ahead=7)
         return {"status": "ok", "action": "full_sync", "sync": result}
 
+    # Enrich with related entities (Account, Opportunity, Participants)
+    sales_details = _enrich_salesforce_event(source, source_id, event_data)
+
     db = get_supabase()
 
     # Check if this source event already exists
@@ -84,7 +87,7 @@ async def _handle_upsert(data: dict) -> dict:
     if source_resp.data:
         # Update existing
         source_row = source_resp.data[0]
-        db.table("events").update({
+        update_data = {
             "title": normalized.title,
             "start_time": normalized.start_time.isoformat(),
             "end_time": normalized.end_time.isoformat(),
@@ -92,7 +95,10 @@ async def _handle_upsert(data: dict) -> dict:
             "description": normalized.description,
             "attendees": normalized.attendees,
             "related_deal": normalized.related_deal,
-        }).eq("id", source_row["event_id"]).execute()
+        }
+        if sales_details:
+            update_data["sales_details"] = sales_details
+        db.table("events").update(update_data).eq("id", source_row["event_id"]).execute()
 
         db.table("event_sources").update({
             "raw_data": normalized.raw_data,
@@ -114,12 +120,17 @@ async def _handle_upsert(data: dict) -> dict:
 
     if candidate:
         merged_attendees = merge_attendees(candidate.get("attendees") or [], normalized.attendees)
-        db.table("events").update({
+        merge_update = {
             "attendees": merged_attendees,
             "description": normalized.description or candidate.get("description"),
             "location": normalized.location or candidate.get("location"),
             "related_deal": normalized.related_deal or candidate.get("related_deal"),
-        }).eq("id", candidate["id"]).execute()
+        }
+        if sales_details:
+            merge_update["sales_details"] = sales_details
+        elif candidate.get("sales_details"):
+            merge_update["sales_details"] = candidate["sales_details"]
+        db.table("events").update(merge_update).eq("id", candidate["id"]).execute()
 
         db.table("event_sources").insert({
             "event_id": candidate["id"],
@@ -133,7 +144,7 @@ async def _handle_upsert(data: dict) -> dict:
 
     # Create new
     merge_key = compute_merge_key(normalized)
-    insert_resp = db.table("events").insert({
+    insert_data = {
         "title": normalized.title,
         "start_time": normalized.start_time.isoformat(),
         "end_time": normalized.end_time.isoformat(),
@@ -142,7 +153,10 @@ async def _handle_upsert(data: dict) -> dict:
         "attendees": normalized.attendees,
         "related_deal": normalized.related_deal,
         "merge_key": merge_key,
-    }).execute()
+    }
+    if sales_details:
+        insert_data["sales_details"] = sales_details
+    insert_resp = db.table("events").insert(insert_data).execute()
 
     event_id = insert_resp.data[0]["id"]
 
@@ -205,15 +219,28 @@ async def _handle_delete(data: dict) -> dict:
 async def _handle_trigger_event(data: dict) -> dict:
     """Handle Composio trigger events (e.g. calendar change notifications).
 
-    Trigger payloads may contain the actual event data or just a notification.
-    Try to extract event info; fall back to full sync if we can't.
+    For the Generic SObject trigger, the payload structure is:
+    {
+      "sobject": "Event",
+      "id": "00U...",
+      "monitored_values": {"Subject": "...", "StartDateTime": "...", ...},
+      ...
+    }
+
+    We need to fetch the full Event record + related entities via SOQL.
     """
     # Check if this is a cancellation/deletion
     status = data.get("status", "").lower()
     if status in ("cancelled", "deleted"):
         return await _handle_delete(data)
 
-    # Try as upsert
+    # Handle Generic SObject trigger for Salesforce Event
+    sobject = data.get("sobject", "")
+    record_id = data.get("id", "")
+    if sobject == "Event" and record_id:
+        return await _handle_salesforce_event_trigger(record_id)
+
+    # Try as standard upsert
     source, source_id, _ = _extract_event_info(data)
     if source and source_id:
         return await _handle_upsert(data)
@@ -222,6 +249,57 @@ async def _handle_trigger_event(data: dict) -> dict:
     logger.info("Cannot parse trigger event, triggering full sync")
     result = await sync_events(days_ahead=7)
     return {"status": "ok", "action": "full_sync", "sync": result}
+
+
+async def _handle_salesforce_event_trigger(record_id: str) -> dict:
+    """Handle a Salesforce Event update from the Generic SObject trigger.
+
+    Fetches the full Event record with relationships via SOQL, then upserts.
+    """
+    client, account = _salesforce_adapter._get_client_and_account()
+    if not client or not account:
+        logger.warning("No Salesforce connection for event enrichment, falling back to full sync")
+        result = await sync_events(days_ahead=7)
+        return {"status": "ok", "action": "full_sync", "sync": result}
+
+    # Fetch the full Event record with relationships
+    soql = (
+        "SELECT Id, Subject, StartDateTime, EndDateTime, Location, Description, "
+        "WhoId, WhatId, Who.Name, Who.Email, What.Name, What.Type, "
+        "OwnerId, Owner.Name, Owner.Email "
+        f"FROM Event WHERE Id = '{record_id}'"
+    )
+    raw = _salesforce_adapter._execute_soql(client, account, soql)
+    if not raw or not raw.get("records"):
+        logger.warning("Could not fetch Event %s, falling back to full sync", record_id)
+        result = await sync_events(days_ahead=7)
+        return {"status": "ok", "action": "full_sync", "sync": result}
+
+    record = raw["records"][0]
+
+    # Build a data dict that _extract_event_info and _handle_upsert can process
+    enriched_data = {
+        "app": "salesforce",
+        **record,
+    }
+
+    return await _handle_upsert(enriched_data)
+
+
+def _enrich_salesforce_event(source: str, source_id: str, event_data: dict) -> dict | None:
+    """Fetch related entities (Account, Opportunity, Participants) for a Salesforce event."""
+    if source != "salesforce":
+        return None
+    try:
+        client, account = _salesforce_adapter._get_client_and_account()
+        if not client or not account:
+            return None
+        # Build a minimal record with Id and What info for the adapter
+        record = {"Id": source_id, **event_data}
+        return _salesforce_adapter.fetch_related_for_event(client, account, record)
+    except Exception as e:
+        logger.warning("Failed to enrich Salesforce event %s: %s", source_id, e)
+        return None
 
 
 def _extract_event_info(data: dict) -> tuple[str | None, str | None, dict]:
@@ -250,13 +328,19 @@ def _extract_event_info(data: dict) -> tuple[str | None, str | None, dict]:
         elif "outlook" in str(data).lower():
             source = "outlook_calendar"
 
-    # Extract source_id
+    # Extract source_id (Salesforce uses capital "Id", others use "id")
     source_id = (
         event_data.get("id")
+        or event_data.get("Id")
         or event_data.get("eventId")
         or event_data.get("source_id")
         or data.get("id")
+        or data.get("Id")
     )
+
+    if not source or not source_id:
+        logger.debug("_extract_event_info failed: source=%s, source_id=%s, keys=%s",
+                      source, source_id, list(data.keys()))
 
     return source, source_id, event_data
 

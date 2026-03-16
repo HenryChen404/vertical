@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { ChevronDown, RefreshCw, X, CheckCircle2 } from "lucide-react";
 import { NavBar } from "@/components/layout/nav-bar";
@@ -38,30 +39,39 @@ function isTomorrow(isoStr: string): boolean {
   return d.toDateString() === tomorrow.toDateString();
 }
 
-function EventRow({ event }: { event: CalendarEvent }) {
-  const sources = event.event_sources.map((s) => s.source);
+function EventRow({ event, isLast }: { event: CalendarEvent; isLast: boolean }) {
+  const sales = event.sales_details;
+  const accountName = sales?.account?.name;
+  const oppName = sales?.opportunity?.name;
+  const subtitle = [accountName, oppName].filter(Boolean).join(" ｜ ");
+
   return (
-    <div className="flex flex-col gap-1 pb-5 border-b border-[#EBEBEB]">
+    <Link
+      href={`/schedule/${event.id}`}
+      className={`flex flex-col gap-1 ${isLast ? "" : "pb-5 border-b border-[#EBEBEB]"}`}
+    >
       <p className="text-[13px] text-[#7A7A7A] leading-4">
         {formatTime(event.start_time)} - {formatTime(event.end_time)}
       </p>
       <p className="text-[16px] text-[#3D3D3D] leading-6">{event.title}</p>
-      {event.location && (
+      {subtitle ? (
+        <p className="text-[13px] text-[#7A7A7A] leading-4">{subtitle}</p>
+      ) : event.location ? (
         <p className="text-[13px] text-[#7A7A7A] leading-4">{event.location}</p>
-      )}
-      {sources.length > 0 && (
-        <div className="flex gap-1 mt-1">
-          {sources.includes("google_calendar") && (
-            <span className="text-[11px] text-[#7A7A7A] bg-[#F0F0F0] px-1.5 py-0.5 rounded">Google</span>
-          )}
-          {sources.includes("outlook_calendar") && (
-            <span className="text-[11px] text-[#7A7A7A] bg-[#F0F0F0] px-1.5 py-0.5 rounded">Outlook</span>
-          )}
-          {sources.includes("salesforce") && (
-            <span className="text-[11px] text-[#7A7A7A] bg-[#F0F0F0] px-1.5 py-0.5 rounded">Salesforce</span>
-          )}
-        </div>
-      )}
+      ) : null}
+    </Link>
+  );
+}
+
+function EventGroup({ label, events: groupEvents }: { label: string; events: CalendarEvent[] }) {
+  return (
+    <div className="flex flex-col gap-6">
+      <p className="text-[13px] font-semibold text-[#3D3D3D]">{label}</p>
+      <div className="flex flex-col gap-5">
+        {groupEvents.map((e, i) => (
+          <EventRow key={e.id} event={e} isLast={i === groupEvents.length - 1} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -205,10 +215,13 @@ export default function SalesPage() {
     return acc;
   }, {});
 
+  const hasEvents = events.length > 0;
+  const isEmpty = !loading && !hasEvents;
+
   return (
-    <div className="bg-[#F9F9F9] min-h-full">
+    <div className="flex flex-col bg-[#F9F9F9] min-h-full">
       <NavBar />
-      <div className="px-6">
+      <div className="flex flex-col flex-1 px-6">
         {/* Title */}
         <div className="pb-6 border-b border-[#EBEBEB] mt-8">
           <button onClick={openModal} className="flex items-center gap-2">
@@ -217,69 +230,62 @@ export default function SalesPage() {
           </button>
         </div>
 
-        {/* Status banner */}
-        <div className="mt-5">
-          <StatusBanner
-            state={bannerState}
-            unsyncedCount={unsyncedCount}
-            onDismiss={() => setBannerState("hidden")}
-          />
-        </div>
-
-        {/* Loading state */}
-        {loading && (
-          <div className="pt-8 text-center">
-            <p className="text-[14px] text-[#7A7A7A]">Loading events...</p>
-          </div>
-        )}
-
-        {/* Today */}
-        {todayEvents.length > 0 && (
-          <div className="pt-2 flex flex-col gap-6">
-            <p className="text-[13px] font-semibold text-[#3D3D3D]">Today</p>
-            <div className="flex flex-col gap-5">
-              {todayEvents.map((e) => (
-                <EventRow key={e.id} event={e} />
-              ))}
+        {isEmpty ? (
+          /* Empty state — vertically centered with feedback at bottom */
+          <div className="flex flex-col flex-1 justify-between pb-6">
+            <div />
+            <div className="flex flex-col items-center gap-3">
+              <Image src="/icons/empty-calendar.svg" alt="" width={52} height={52} />
+              <div className="flex flex-col items-center gap-2">
+                <p className="text-[20px] text-[#7A7A7A] leading-7">
+                  No upcoming meetings
+                </p>
+                <p className="text-[13px] text-[#7A7A7A] leading-4 text-center">
+                  The scheduled meetings will be listed here
+                </p>
+              </div>
+            </div>
+            <div className="py-3 text-center">
+              <p className="text-[13px] text-[#A3A3A3]">Send feedback</p>
             </div>
           </div>
-        )}
+        ) : (
+          /* Normal state with events */
+          <>
+            {/* Status banner */}
+            <div className="mt-5">
+              <StatusBanner
+                state={bannerState}
+                unsyncedCount={unsyncedCount}
+                onDismiss={() => setBannerState("hidden")}
+              />
+            </div>
 
-        {/* Tomorrow */}
-        {tomorrowEvents.length > 0 && (
-          <div className="pt-2 flex flex-col gap-6">
-            <p className="text-[13px] font-semibold text-[#3D3D3D]">Tomorrow</p>
-            <div className="flex flex-col gap-5">
-              {tomorrowEvents.map((e) => (
-                <EventRow key={e.id} event={e} />
+            {/* Loading state */}
+            {loading && (
+              <div className="pt-8 text-center">
+                <p className="text-[14px] text-[#7A7A7A]">Loading events...</p>
+              </div>
+            )}
+
+            <div className="flex flex-col gap-8 mt-5">
+              {todayEvents.length > 0 && (
+                <EventGroup label="Today" events={todayEvents} />
+              )}
+              {tomorrowEvents.length > 0 && (
+                <EventGroup label="Tomorrow" events={tomorrowEvents} />
+              )}
+              {Object.entries(laterByDate).map(([date, dateEvents]) => (
+                <EventGroup key={date} label={date} events={dateEvents} />
               ))}
             </div>
-          </div>
-        )}
 
-        {/* Later dates */}
-        {Object.entries(laterByDate).map(([date, dateEvents]) => (
-          <div key={date} className="pt-2 flex flex-col gap-6">
-            <p className="text-[13px] font-semibold text-[#3D3D3D]">{date}</p>
-            <div className="flex flex-col gap-5">
-              {dateEvents.map((e) => (
-                <EventRow key={e.id} event={e} />
-              ))}
+            {/* Send feedback */}
+            <div className="py-3 text-center mt-4">
+              <p className="text-[13px] text-[#A3A3A3]">Send feedback</p>
             </div>
-          </div>
-        ))}
-
-        {/* Empty state */}
-        {!loading && events.length === 0 && (
-          <div className="pt-8 text-center">
-            <p className="text-[14px] text-[#7A7A7A]">No upcoming events</p>
-          </div>
+          </>
         )}
-
-        {/* Send feedback */}
-        <div className="py-3 text-center mt-4">
-          <p className="text-[13px] text-[#A3A3A3]">Send feedback</p>
-        </div>
       </div>
     </div>
   );

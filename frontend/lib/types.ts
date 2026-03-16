@@ -43,9 +43,32 @@ export interface Deal {
 export interface Attendee {
   id: string;
   name: string;
-  title: string;
-  company: string;
+  title?: string;
+  company?: string;
   avatar_url?: string;
+  status?: string;
+}
+
+export interface SalesDetails {
+  account?: {
+    id?: string;
+    name: string;
+    annual_revenue?: number | null;
+    industry?: string | null;
+  };
+  opportunity?: {
+    id?: string;
+    name: string;
+    amount?: number | null;
+    stage?: string;
+    close_date?: string | null;
+  };
+  participants?: {
+    id?: string;
+    name: string;
+    email?: string;
+    status?: string;
+  }[];
 }
 
 export interface MeetingDetail {
@@ -55,8 +78,8 @@ export interface MeetingDetail {
   time_start: string;
   time_end: string;
   location: string;
-  account: { name: string; sector: string; deal_id?: string };
-  opportunity: { name: string; amount: string; stage: string };
+  account?: { name: string; sector: string; annual_revenue?: string; deal_id?: string } | null;
+  opportunity?: { name: string; amount: string; stage: string; close_date?: string } | null;
   attendees: Attendee[];
   feedback: string;
   linked_files: { id: string; title: string; duration: string }[];
@@ -111,6 +134,7 @@ export interface CalendarEvent {
   created_at: string;
   updated_at: string;
   event_sources: EventSource[];
+  sales_details?: SalesDetails | null;
 }
 
 export interface UnsyncedRecording {
