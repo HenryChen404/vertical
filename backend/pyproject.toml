@@ -9,6 +9,12 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "supabase>=2.0.0",
     "python-multipart>=0.0.9",
+    "langgraph>=0.2.0",
+    "langgraph-checkpoint-postgres",
+    "google-genai>=1.0.0",
+    "elevenlabs>=1.0.0",
+    "httpx>=0.27.0",
+    "psycopg[binary]>=3.1.0",
 ]
 
 [tool.uv]

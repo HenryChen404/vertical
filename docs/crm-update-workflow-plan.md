@@ -13,8 +13,8 @@
 │                                      │     │                                      │
 │  ┌─ P1: PLAUD → webhook → done      │     │  extract ──→ review ──→ push_to_crm  │
 │  ├─ P2: PLAUD → webhook → done      │ ──→ │              ↑    │                  │
-│  ├─ L1: Whisper → await  → done     │     │              └────┘                  │
-│  └─ L2: Whisper → await  → done     │     │         (human chat loop)            │
+│  ├─ L1: ElevenLabs → await → done   │     │              └────┘                  │
+│  └─ L2: ElevenLabs → await → done   │     │         (human chat loop)            │
 │                                      │     │                                      │
 │  all done → 触发 Phase B             │     │  State: transcripts, extractions,    │
 │                                      │     │         messages, original_values    │
@@ -36,7 +36,7 @@
 |------|------|------|
 | id | UUID | PK |
 | event_id | UUID | FK → events |
-| state | TEXT | created / transcribing / extracting / review / pushing / done / failed |
+| state | SMALLINT | 0=created, 1=transcribing, 2=extracting, 3=review, 4=pushing, 5=done, 6=failed |
 | extractions | JSONB | 最新快照 `{ opportunity: {status, data}, ... }` |
 | original_values | JSONB | Salesforce 现有值（Old Value 列） |
 | created_at | TIMESTAMPTZ | |
@@ -50,7 +50,7 @@
 | workflow_id | UUID | FK → workflows |
 | type | TEXT | plaud / local |
 | recording_id | TEXT | plaud_file_id 或 recordings.id |
-| state | TEXT | pending / transcribing / completed / failed |
+| state | SMALLINT | 0=pending, 1=transcribing, 2=completed, 3=failed |
 | transcript | TEXT | 转写结果 |
 | error | TEXT | 失败原因 |
 | created_at | TIMESTAMPTZ | |
@@ -59,14 +59,14 @@
 ### 状态流转
 
 ```
-创建 workflow (state=transcribing)
-  ├─ 为每个录音创建 task (state=pending)
-  ├─ 本地录音 → 调 Whisper API (await) → task.state = completed
-  └─ PLAUD 录音 → 触发转写 API → task.state = transcribing → webhook 回调 → task.state = completed
+创建 workflow (state=1 transcribing)
+  ├─ 为每个录音创建 task (state=0 pending)
+  ├─ 本地录音 → 调 ElevenLabs Scribe v2 API (await) → task.state = 2 completed
+  └─ PLAUD 录音 → 触发转写 API → task.state = 1 transcribing → webhook 回调 → task.state = 2 completed
 
 每个 task 完成时:
-  查询 pending/transcribing task 数量
-  = 0 → workflow.state = extracting, 触发 Phase B
+  查询 state=0 (pending) 或 state=1 (transcribing) 的 task 数量
+  = 0 → workflow.state = 2 (extracting), 触发 Phase B
   > 0 → 继续等待
 ```
 
@@ -92,7 +92,7 @@ class CrmWorkflowState(TypedDict):
     transcripts: dict           # { recording_id: text }
     extractions: dict           # { dimension: { status, data/error } }
     original_values: dict       # { dimension: { field: old_value } }
-    messages: list              # Claude conversation history
+    messages: list              # Gemini conversation history
     should_push: bool           # review 阶段用户确认后为 True
 ```
 
@@ -102,7 +102,7 @@ class CrmWorkflowState(TypedDict):
 START → extract → review ←→ (human loop) → push_to_crm → END
 ```
 
-**extract** — 并行调 Claude 提取多个维度，每个维度对应一个 skill：
+**extract** — 并行调 Gemini 3 Flash (`gemini-3-flash-preview`) 提取多个维度，每个维度对应一个 skill：
 
 | Skill | 说明 |
 |-------|------|
@@ -112,7 +112,7 @@ START → extract → review ←→ (human loop) → push_to_crm → END
 | Event Summary | 会议摘要、关键讨论点 |
 | ··· | 可扩展更多维度 |
 
-每个 skill: system prompt + output schema + Claude API (structured output)。使用 `asyncio.gather()` 并行执行。结果存入 `workflow.extractions`，每个维度带独立 status：
+每个 skill: system prompt + output schema + Gemini API (structured output via `google-genai`)。使用 `asyncio.gather()` 并行执行。结果存入 `workflow.extractions`，每个维度带独立 status：
 
 ```python
 extractions = {
@@ -124,7 +124,7 @@ extractions = {
 
 至少 1 个维度 completed → 进入 review。
 
-**review** — `interrupt()` 暂停，等用户 chat 输入，调 Claude + tools 处理：
+**review** — `interrupt()` 暂停，等用户 chat 输入，调 Gemini + tools 处理：
 
 | Tool | 说明 |
 |------|------|
@@ -156,27 +156,41 @@ Chat history 记录在 `messages` 中，extractions 保持最新快照。
 ```
 langgraph >= 0.2.0
 langgraph-checkpoint-postgres
-anthropic                       # Claude API (extraction + review)
-openai                          # Whisper API (本地录音转写)
-httpx                           # PLAUD API 调用
+google-genai >= 1.0.0           # Gemini API (extraction + review)
+elevenlabs >= 1.0.0             # Scribe v2 (本地录音转写)
+httpx >= 0.27.0                 # PLAUD API 调用
+```
+
+---
+
+## 环境变量
+
+```
+GEMINI_API_KEY=              # Gemini 3 Flash (extraction + review)
+ELEVENLABS_API_KEY=          # ElevenLabs Scribe v2 (本地录音转写)
+SUPABASE_DB_URI=             # LangGraph checkpointer (postgres://...)
 ```
 
 ---
 
 ## 执行步骤
 
-### Step 1: 数据库 Migration
+### Step 1: 依赖 + Migration
 
-- 创建 `workflows` 表
-- 创建 `workflow_tasks` 表
-- 文件: `backend/supabase/migrations/20260317000001_add_workflows.sql`
+- 修改 `backend/pyproject.toml` — 添加依赖
+- 创建 `backend/supabase/migrations/20260317000001_add_workflows.sql`
+  - `workflows` 表 — state 用 SMALLINT + CHECK 约束
+  - `workflow_tasks` 表 — state 用 SMALLINT + CHECK 约束
+- 更新 `backend/.env.example` — 新增环境变量
 
 ### Step 2: Workflow CRUD + 状态机
 
 - 创建 `backend/services/workflow.py` — 状态机逻辑
+  - Python 端用 `IntEnum` 对应数据库整数值
   - `create_workflow(event_id, recording_ids)` → 创建 workflow + tasks
   - `on_task_completed(task_id, transcript)` → 更新 task，检查 all done
-  - `get_workflow_status(workflow_id)` → 返回当前状态 + 进度
+  - `on_task_failed(task_id, error)` → 更新 task，检查是否全部终态
+  - `get_workflow(workflow_id)` → 返回当前状态 + 进度
 - 创建 `backend/routers/workflows.py` — API endpoints
   - `POST /api/workflows`
   - `GET /api/workflows/{id}`
@@ -184,34 +198,36 @@ httpx                           # PLAUD API 调用
 ### Step 3: 转写服务
 
 - 创建 `backend/services/transcription.py`
-  - `transcribe_local(recording_id)` → Whisper API 调用
+  - `transcribe_local(recording_id)` → ElevenLabs Scribe v2 API
+    - 从 Supabase Storage 下载录音
+    - POST `https://api.elevenlabs.io/v1/speech-to-text`，model_id=`scribe_v2`
+    - 返回转写文本
   - `trigger_plaud_transcription(plaud_file_id)` → PLAUD API 触发
   - `fetch_plaud_transcript(plaud_file_id)` → PLAUD API 获取结果
 - 更新 `backend/routers/webhooks.py` — PLAUD 转写完成 webhook handler
-- 环境变量: `OPENAI_API_KEY` (Whisper)
 
 ### Step 4: LangGraph 骨架
 
-- 安装依赖: `langgraph`, `langgraph-checkpoint-postgres`, `anthropic`
 - 创建 `backend/services/crm_graph.py` — LangGraph 定义
   - State 定义
   - AsyncPostgresSaver checkpointer (Supabase Postgres)
-  - Graph 编译
-- 环境变量: `SUPABASE_DB_URI` (Postgres 直连), `ANTHROPIC_API_KEY`
+  - Graph: extract → review → push_to_crm
+  - Phase A → Phase B 桥接函数
 
 ### Step 5: Extraction Skills
 
 - 创建 `backend/services/extraction/` 目录
-  - `opportunity.py` — Claude structured output 提取 opportunity 字段
+  - `base.py` — Gemini API 共享调用逻辑 (`google-genai` SDK)
+  - `opportunity.py` — Gemini structured output 提取 opportunity 字段
   - `contact.py` — 提取 contact 信息
   - `account.py` — 提取 account 洞察
   - `event_summary.py` — 会议摘要和关键讨论点
-- 每个 skill: system prompt + output schema + Claude API 调用
+- 每个 skill: system prompt + output schema + Gemini API 调用
 - 实现 `extract` 节点: `asyncio.gather()` 并行
 
 ### Step 6: Review 节点 + Chat API
 
-- 实现 `review` 节点: `interrupt()` + Claude tool_use
+- 实现 `review` 节点: `interrupt()` + Gemini tool_use
 - 定义 tools: `update_field`, `re_extract`, `confirm_and_push`
 - 实现 `POST /api/workflows/{id}/chat` → `Command(resume=message)`
 - 实现 `PUT /api/workflows/{id}/extractions` → Edit Mode 直接修改
@@ -234,3 +250,25 @@ httpx                           # PLAUD API 调用
 - 端到端: 创建 workflow → 转写完成 → 提取 → review chat → 修改 → push
 - 验证 checkpointer 持久化 (重启后 resume)
 - 验证 webhook 回调正确触发状态流转
+
+---
+
+## 文件清单
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `backend/pyproject.toml` | 修改 | 添加 langgraph, google-genai, elevenlabs, httpx |
+| `backend/.env.example` | 修改 | 新增 GEMINI_API_KEY, ELEVENLABS_API_KEY, SUPABASE_DB_URI |
+| `backend/supabase/migrations/20260317000001_add_workflows.sql` | 新建 | workflows + workflow_tasks 表 (SMALLINT 状态) |
+| `backend/services/workflow.py` | 新建 | 状态机 (IntEnum) |
+| `backend/services/transcription.py` | 新建 | ElevenLabs Scribe v2 + PLAUD |
+| `backend/services/crm_graph.py` | 新建 | LangGraph 定义 |
+| `backend/services/extraction/__init__.py` | 新建 | |
+| `backend/services/extraction/base.py` | 新建 | Gemini API 共享逻辑 |
+| `backend/services/extraction/opportunity.py` | 新建 | Opportunity 提取 |
+| `backend/services/extraction/contact.py` | 新建 | Contact 提取 |
+| `backend/services/extraction/account.py` | 新建 | Account 提取 |
+| `backend/services/extraction/event_summary.py` | 新建 | 会议摘要提取 |
+| `backend/routers/workflows.py` | 新建 | Workflow API endpoints |
+| `backend/main.py` | 修改 | 注册 workflows router |
+| `backend/routers/webhooks.py` | 修改 | PLAUD 转写 webhook handler |
