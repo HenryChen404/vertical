@@ -1,13 +1,13 @@
 import os
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from models.schemas import IntegrationStatus, ConnectionInitResponse
+from middleware.auth import get_current_user
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-USER_ID = "demo_user"
 
 # Provider → Composio toolkit slug + env var for auth_config_id
 PROVIDER_CONFIG = {
@@ -15,16 +15,27 @@ PROVIDER_CONFIG = {
         "type": "calendar",
         "toolkit_slug": "googlecalendar",
         "auth_config_env": "COMPOSIO_GOOGLE_CALENDAR_AUTH_CONFIG_ID",
+        "trigger_slug": "GOOGLECALENDAR_WATCH_CALENDAR_EVENTS",
     },
     "outlook": {
         "type": "calendar",
         "toolkit_slug": "outlookcalendar",
         "auth_config_env": "COMPOSIO_OUTLOOK_CALENDAR_AUTH_CONFIG_ID",
+        "trigger_slug": None,  # TODO: add when available
     },
     "salesforce": {
         "type": "crm",
         "toolkit_slug": "salesforce",
         "auth_config_env": "COMPOSIO_SALESFORCE_AUTH_CONFIG_ID",
+        "trigger_slug": "SALESFORCE_GENERIC_S_OBJECT_RECORD_UPDATED_TRIGGER",
+        "trigger_config": {
+            "sobject_name": "Event",
+            "fields_to_monitor": [
+                "Subject", "StartDateTime", "EndDateTime",
+                "Location", "Description", "WhoId", "WhatId",
+            ],
+            "interval": 2,
+        },
     },
 }
 
@@ -42,18 +53,130 @@ def _get_composio_client():
     return Composio(api_key=api_key)
 
 
-def _check_connection(client, toolkit_slug: str) -> bool:
-    """Check if an active connection exists for the given toolkit."""
+def _check_connection(client, toolkit_slug: str, user_id: str):
+    """Check if an active connection exists for the given toolkit.
+
+    Returns the connected account if found, else None.
+    """
     try:
         result = client.connected_accounts.list(
-            user_ids=[USER_ID],
+            user_ids=[user_id],
             toolkit_slugs=[toolkit_slug],
             statuses=["ACTIVE"],
         )
-        return bool(result.items)
+        return result.items[0] if result.items else None
     except Exception as e:
         logger.warning("Composio status check failed: %s", e)
-    return False
+    return None
+
+
+def _setup_trigger(client, provider: str, connected_account_id: str) -> str | None:
+    """Create a Composio trigger for the given provider. Returns trigger_id or None."""
+    config = PROVIDER_CONFIG.get(provider)
+    if not config or not config.get("trigger_slug"):
+        return None
+
+    try:
+        resp = client.triggers.create(
+            slug=config["trigger_slug"],
+            connected_account_id=connected_account_id,
+            trigger_config=config.get("trigger_config", {}),
+        )
+        trigger_id = resp.trigger_id
+        logger.info("Created trigger %s for provider %s (account %s)",
+                     trigger_id, provider, connected_account_id)
+        return trigger_id
+    except Exception as e:
+        logger.error("Failed to create trigger for %s: %s", provider, e)
+        return None
+
+
+def _teardown_triggers(client, provider: str, user_id: str) -> int:
+    """Delete all triggers for the given provider and user. Returns count deleted."""
+    config = PROVIDER_CONFIG.get(provider)
+    if not config or not config.get("trigger_slug"):
+        return 0
+
+    deleted = 0
+    try:
+        # list_active doesn't filter by user_id directly, so filter by connected_account
+        result = client.connected_accounts.list(
+            user_ids=[user_id],
+            toolkit_slugs=[config["toolkit_slug"]],
+            statuses=["ACTIVE"],
+        )
+        account_ids = [acc.id for acc in result.items]
+        if not account_ids:
+            return 0
+
+        active = client.triggers.list_active(
+            connected_account_ids=account_ids,
+            trigger_names=[config["trigger_slug"]],
+        )
+        triggers = active.items if hasattr(active, "items") else (active.triggers if hasattr(active, "triggers") else [])
+        for trigger in triggers:
+            try:
+                tid = trigger.id if hasattr(trigger, "id") else trigger.get("id")
+                if tid:
+                    client.triggers.delete(trigger_id=tid)
+                    deleted += 1
+                    logger.info("Deleted trigger %s for provider %s", tid, provider)
+            except Exception as e:
+                logger.warning("Failed to delete trigger: %s", e)
+    except Exception as e:
+        logger.error("Failed to list/delete triggers for %s: %s", provider, e)
+
+    return deleted
+
+
+@router.get("/integrations/connect/redirect")
+def connect_redirect(
+    provider: str = Query(...),
+    callback_url: str = Query(...),
+    request: Request = None,
+    user: dict = Depends(get_current_user),
+):
+    """Server-side 302 redirect to OAuth provider.
+
+    Frontend navigates here directly via window.location.href so there is
+    no async gap and no UI flicker.
+    """
+    if provider not in PROVIDER_CONFIG:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+
+    config = PROVIDER_CONFIG[provider]
+    client = _get_composio_client()
+    user_id = user["id"]
+
+    # Mock mode — redirect back immediately as if connected
+    if client is None:
+        logger.info("COMPOSIO_API_KEY not set, using mock connect for %s", provider)
+        if config["type"] == "crm":
+            _mock_crm_state["connected"] = True
+            _mock_crm_state["provider"] = provider
+        else:
+            _mock_calendar_state["connected"] = True
+            _mock_calendar_state["provider"] = provider
+        return RedirectResponse(url=callback_url, status_code=302)
+
+    auth_config_id = os.getenv(config["auth_config_env"])
+    if not auth_config_id:
+        raise HTTPException(
+            status_code=501,
+            detail=f"Auth config not set for {provider}. Set {config['auth_config_env']} env var.",
+        )
+
+    try:
+        connection_request = client.connected_accounts.initiate(
+            user_id=user_id,
+            auth_config_id=auth_config_id,
+            callback_url=callback_url,
+            allow_multiple=True,
+        )
+        return RedirectResponse(url=connection_request.redirect_url, status_code=302)
+    except Exception as e:
+        logger.error("Composio initiate failed: %s", e)
+        raise HTTPException(status_code=502, detail=f"Failed to initiate OAuth: {e}")
 
 
 class ConnectRequest(BaseModel):
@@ -62,12 +185,17 @@ class ConnectRequest(BaseModel):
 
 
 @router.post("/integrations/connect", response_model=ConnectionInitResponse)
-def initiate_connection(req: ConnectRequest):
+def initiate_connection(
+    req: ConnectRequest,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
     if req.provider not in PROVIDER_CONFIG:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {req.provider}")
 
     config = PROVIDER_CONFIG[req.provider]
     client = _get_composio_client()
+    user_id = user["id"]
 
     # Fallback: no Composio key → mock behavior
     if client is None:
@@ -89,7 +217,7 @@ def initiate_connection(req: ConnectRequest):
 
     try:
         connection_request = client.connected_accounts.initiate(
-            user_id=USER_ID,
+            user_id=user_id,
             auth_config_id=auth_config_id,
             callback_url=req.redirect_url,
             allow_multiple=True,
@@ -108,12 +236,17 @@ class DisconnectRequest(BaseModel):
 
 
 @router.post("/integrations/disconnect")
-def disconnect(req: DisconnectRequest):
+def disconnect(
+    req: DisconnectRequest,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
     if req.provider not in PROVIDER_CONFIG:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {req.provider}")
 
     config = PROVIDER_CONFIG[req.provider]
     client = _get_composio_client()
+    user_id = user["id"]
 
     if client is None:
         if config["type"] == "crm":
@@ -125,8 +258,11 @@ def disconnect(req: DisconnectRequest):
         return {"success": True}
 
     try:
+        # Teardown triggers before disconnecting
+        triggers_deleted = _teardown_triggers(client, req.provider, user_id)
+
         result = client.connected_accounts.list(
-            user_ids=[USER_ID],
+            user_ids=[user_id],
             toolkit_slugs=[config["toolkit_slug"]],
             statuses=["ACTIVE"],
         )
@@ -134,41 +270,46 @@ def disconnect(req: DisconnectRequest):
         for account in result.items:
             client.connected_accounts.delete(nanoid=account.id)
             deleted += 1
-        return {"success": True, "deleted": deleted}
+        return {"success": True, "deleted": deleted, "triggers_deleted": triggers_deleted}
     except Exception as e:
         logger.error("Composio disconnect failed: %s", e)
         raise HTTPException(status_code=502, detail=f"Failed to disconnect: {e}")
 
 
 @router.get("/integrations/crm/status", response_model=IntegrationStatus)
-def crm_status():
+def crm_status(request: Request, user: dict = Depends(get_current_user)):
     client = _get_composio_client()
     if client is None:
         return _mock_crm_state
 
-    connected = _check_connection(client, "salesforce")
-    return IntegrationStatus(connected=connected, provider="salesforce" if connected else None)
+    account = _check_connection(client, "salesforce", user["id"])
+    if account:
+        # Ensure trigger is set up for this connection
+        _setup_trigger(client, "salesforce", account.id)
+        return IntegrationStatus(connected=True, provider="salesforce")
+    return IntegrationStatus(connected=False)
 
 
 @router.get("/integrations/{provider}/verify-api")
-def verify_api_access(provider: str):
-    """After OAuth, verify the connected org actually supports API access.
-
-    Makes a lightweight API call to check. Returns:
-    - api_enabled: true/false
-    - error: error message if API is not available
-    """
+def verify_api_access(
+    provider: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """After OAuth, verify the connected org actually supports API access."""
     if provider not in PROVIDER_CONFIG:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
 
     client = _get_composio_client()
+    user_id = user["id"]
+
     if client is None:
         return {"api_enabled": True, "mock": True}
 
     config = PROVIDER_CONFIG[provider]
     try:
         result = client.connected_accounts.list(
-            user_ids=[USER_ID],
+            user_ids=[user_id],
             toolkit_slugs=[config["toolkit_slug"]],
             statuses=["ACTIVE"],
         )
@@ -183,7 +324,7 @@ def verify_api_access(provider: str):
                 slug="SALESFORCE_EXECUTE_SOQL_QUERY",
                 arguments={"soql_query": "SELECT Id FROM Organization LIMIT 1"},
                 connected_account_id=account.id,
-                user_id=USER_ID,
+                user_id=user_id,
                 dangerously_skip_version_check=True,
             )
             data = resp.model_dump() if hasattr(resp, "model_dump") else resp
@@ -201,13 +342,16 @@ def verify_api_access(provider: str):
 
 
 @router.get("/integrations/calendar/status", response_model=IntegrationStatus)
-def calendar_status():
+def calendar_status(request: Request, user: dict = Depends(get_current_user)):
     client = _get_composio_client()
     if client is None:
         return _mock_calendar_state
 
     for slug, provider_name in [("googlecalendar", "google"), ("outlookcalendar", "outlook")]:
-        if _check_connection(client, slug):
+        account = _check_connection(client, slug, user["id"])
+        if account:
+            # Ensure trigger is set up for this connection
+            _setup_trigger(client, provider_name, account.id)
             return IntegrationStatus(connected=True, provider=provider_name)
 
     return IntegrationStatus(connected=False)

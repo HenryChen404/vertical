@@ -6,10 +6,11 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from middleware.auth import get_current_user
 from services.crm_graph import get_graph, start_langgraph
 from services.transcription import transcribe_local, trigger_plaud_transcription
 from services.workflow import (
@@ -55,10 +56,13 @@ class UpdateExtractionsRequest(BaseModel):
 async def create_workflow_endpoint(
     req: CreateWorkflowRequest,
     background_tasks: BackgroundTasks,
+    request: Request,
+    user: dict = Depends(get_current_user),
 ):
     """Create a new CRM update workflow and start transcription."""
     recordings = [{"type": r.type, "id": r.id} for r in req.recordings]
-    workflow = create_workflow(req.event_id, recordings)
+    user_id = user["id"] if user["id"] != "demo_user" else None
+    workflow = create_workflow(req.event_id, recordings, user_id=user_id)
 
     # Trigger transcription for each task
     for task in workflow["tasks"]:
@@ -71,7 +75,11 @@ async def create_workflow_endpoint(
 
 
 @router.get("/workflows/{workflow_id}")
-async def get_workflow_endpoint(workflow_id: str):
+async def get_workflow_endpoint(
+    workflow_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
     """Get workflow status with tasks."""
     workflow = get_workflow(workflow_id)
     if not workflow:
@@ -80,7 +88,11 @@ async def get_workflow_endpoint(workflow_id: str):
 
 
 @router.get("/workflows/{workflow_id}/stream")
-async def stream_workflow_endpoint(workflow_id: str):
+async def stream_workflow_endpoint(
+    workflow_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
     """SSE stream for workflow progress updates."""
 
     async def event_generator():
@@ -144,7 +156,12 @@ async def stream_workflow_endpoint(workflow_id: str):
 
 
 @router.post("/workflows/{workflow_id}/chat")
-async def chat_endpoint(workflow_id: str, req: ChatRequest):
+async def chat_endpoint(
+    workflow_id: str,
+    req: ChatRequest,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
     """Resume LangGraph with user message (review chat)."""
     workflow = get_workflow(workflow_id)
     if not workflow:
@@ -168,7 +185,12 @@ async def chat_endpoint(workflow_id: str, req: ChatRequest):
 
 
 @router.put("/workflows/{workflow_id}/extractions")
-async def update_extractions_endpoint(workflow_id: str, req: UpdateExtractionsRequest):
+async def update_extractions_endpoint(
+    workflow_id: str,
+    req: UpdateExtractionsRequest,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
     """Direct edit of extractions (Edit Mode)."""
     workflow = get_workflow(workflow_id)
     if not workflow:
@@ -181,7 +203,12 @@ async def update_extractions_endpoint(workflow_id: str, req: UpdateExtractionsRe
 
 
 @router.post("/workflows/{workflow_id}/confirm")
-async def confirm_endpoint(workflow_id: str, background_tasks: BackgroundTasks):
+async def confirm_endpoint(
+    workflow_id: str,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
     """Confirm and push extractions to CRM."""
     workflow = get_workflow(workflow_id)
     if not workflow:

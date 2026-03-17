@@ -1,38 +1,54 @@
 UNSYNCED_RECORDINGS = [
     {
         "id": "ur1",
-        "title": "Client Meeting: Acme Corp",
-        "date": "Today, 10:00 AM",
-        "duration": "1h 00m",
-        "selected": True,
+        "title": "Client Meeting - Acme Corp",
+        "date": "10:00 AM",
+        "duration": "45 min",
+        "selected": False,
+        "crm_tags": [
+            {"label": "Acme Corp", "type": "account"},
+            {"label": "Q1 Enterprise", "type": "opportunity"},
+        ],
     },
     {
         "id": "ur2",
-        "title": "Product Demo: TechStart Inc",
-        "date": "Today, 2:00 PM",
-        "duration": "1h 30m",
-        "selected": False,
+        "title": "Discovery Call - TechStart",
+        "date": "2:00 PM",
+        "duration": "30 min",
+        "selected": True,
+        "crm_tags": [
+            {"label": "TechStart Inc", "type": "account"},
+            {"label": "Q1 Expansion", "type": "opportunity"},
+        ],
     },
     {
         "id": "ur3",
         "title": "Follow-up: DataFlow Systems",
-        "date": "Yesterday, 3:00 PM",
-        "duration": "45m",
+        "date": "3:00 PM",
+        "duration": "45 min",
         "selected": False,
+        "crm_tags": [
+            {"label": "DataFlow Systems", "type": "account"},
+        ],
     },
     {
         "id": "ur4",
         "title": "Internal Review: Q4 Pipeline",
-        "date": "Yesterday, 11:00 AM",
-        "duration": "30m",
+        "date": "11:00 AM",
+        "duration": "30 min",
         "selected": False,
+        "crm_tags": [],
     },
     {
         "id": "ur5",
         "title": "Discovery Call: NewCo",
-        "date": "Oct 28, 9:00 AM",
-        "duration": "55m",
+        "date": "9:00 AM",
+        "duration": "55 min",
         "selected": False,
+        "crm_tags": [
+            {"label": "NewCo", "type": "account"},
+            {"label": "NewCo Deal", "type": "opportunity"},
+        ],
     },
 ]
 
@@ -42,18 +58,27 @@ CRM_PROPOSAL = {
     "sections": [
         {
             "category": "Opportunity",
+            "name": "Q1 Deal",
             "fields": [
-                {"field": "Stage", "old_value": "Discovery", "new_value": "Proposal"},
-                {"field": "Amount", "old_value": "$45,000", "new_value": "$62,000"},
-                {"field": "Close Date", "old_value": "2025-12-15", "new_value": "2025-11-30"},
+                {"field": "Stage", "old_value": "Discovery", "new_value": "Negotiation"},
+                {"field": "Amount", "old_value": "$200,000", "new_value": "$350,000"},
+                {"field": "Next Step", "old_value": "(empty)", "new_value": "Send proposal by Friday"},
+            ],
+            "confirmed": False,
+        },
+        {
+            "category": "Account",
+            "name": "TechStart Inc",
+            "fields": [
+                {"field": "Industry", "old_value": "Technology", "new_value": "SaaS"},
             ],
             "confirmed": False,
         },
         {
             "category": "Contact",
+            "name": "Mike Johnson",
             "fields": [
-                {"field": "Title", "old_value": "Sales Manager", "new_value": "Head of Sales"},
-                {"field": "Phone", "old_value": "(555) 123-4567", "new_value": "(555) 987-6543"},
+                {"field": "Email", "old_value": "old@tech.com", "new_value": "mike@techstart.com"},
             ],
             "confirmed": False,
         },

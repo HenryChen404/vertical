@@ -105,12 +105,18 @@ class MeetingDetail(BaseModel):
     linked_files: list[LinkedFile] = []
 
 
+class CrmRecordingTag(BaseModel):
+    label: str
+    type: str  # "account" | "opportunity"
+
+
 class UnsyncedRecording(BaseModel):
     id: str
     title: str
     date: str
     duration: str
     selected: bool
+    crm_tags: list[CrmRecordingTag] = []
 
 
 class FieldChange(BaseModel):
@@ -121,6 +127,7 @@ class FieldChange(BaseModel):
 
 class CrmChangeSection(BaseModel):
     category: str
+    name: Optional[str] = None
     fields: list[FieldChange]
     confirmed: bool = False
 

@@ -1,8 +1,13 @@
 export interface RecordingFile {
   id: string;
   title: string;
-  timestamp: string;
+  timestamp?: string;
+  recorded_at?: string;
   duration_seconds: number;
+  source_type?: number; // 1=plaud, 2=local
+  plaud_file_id?: string;
+  event_id?: string | null;
+  crm_sync_status?: number; // 1=not synced, 2=synced
 }
 
 export interface CrmTag {
@@ -82,7 +87,8 @@ export interface MeetingDetail {
   opportunity?: { name: string; amount: string; stage: string; close_date?: string } | null;
   attendees: Attendee[];
   feedback: string;
-  linked_files: { id: string; title: string; duration: string }[];
+  linked_files: { id: string; title: string; duration_seconds: number; recorded_at?: string; plaud_file_id?: string }[];
+  feedback_recordings?: { id: string; title: string; duration_seconds: number }[];
 }
 
 export interface FieldChange {
@@ -93,6 +99,7 @@ export interface FieldChange {
 
 export interface CrmChangeSection {
   category: string;
+  name?: string;
   fields: FieldChange[];
   confirmed: boolean;
 }
@@ -137,10 +144,17 @@ export interface CalendarEvent {
   sales_details?: SalesDetails | null;
 }
 
+export interface CrmRecordingTag {
+  label: string;
+  type: "account" | "opportunity";
+}
+
 export interface UnsyncedRecording {
   id: string;
   title: string;
   date: string;
   duration: string;
   selected: boolean;
+  crm_tags?: CrmRecordingTag[];
 }
+

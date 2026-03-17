@@ -8,22 +8,21 @@ from adapters.base import BaseAdapter, NormalizedEvent
 
 logger = logging.getLogger(__name__)
 
-USER_ID = "demo_user"
-
-
 class SalesforceAdapter(BaseAdapter):
     def __init__(self):
         self.api_key = os.getenv("COMPOSIO_API_KEY")
+        self._current_user_id = "demo_user"
 
-    def _get_client_and_account(self):
+    def _get_client_and_account(self, user_id: str | None = None):
         """Return (Composio client, connected_account) or (None, None)."""
+        uid = user_id or self._current_user_id
         if not self.api_key:
             logger.info("SalesforceAdapter: no COMPOSIO_API_KEY")
             return None, None
         from composio import Composio
         client = Composio(api_key=self.api_key)
         result = client.connected_accounts.list(
-            user_ids=[USER_ID],
+            user_ids=[uid],
             toolkit_slugs=["salesforce"],
             statuses=["ACTIVE"],
         )
@@ -32,14 +31,15 @@ class SalesforceAdapter(BaseAdapter):
             return client, None
         return client, result.items[0]
 
-    def _execute_soql(self, client, connected_account, soql: str) -> dict | None:
+    def _execute_soql(self, client, connected_account, soql: str, user_id: str | None = None) -> dict | None:
         """Execute a SOQL query and return parsed data, or None on failure."""
+        uid = user_id or self._current_user_id
         try:
             resp = client.tools.execute(
                 slug="SALESFORCE_EXECUTE_SOQL_QUERY",
                 arguments={"soql_query": soql},
                 connected_account_id=connected_account.id,
-                user_id=USER_ID,
+                user_id=uid,
                 dangerously_skip_version_check=True,
             )
             data = resp.model_dump() if hasattr(resp, "model_dump") else resp
@@ -51,12 +51,13 @@ class SalesforceAdapter(BaseAdapter):
             logger.error("SOQL execution error: %s", e)
             return None
 
-    async def fetch_events(self, time_min: datetime, time_max: datetime) -> list[NormalizedEvent]:
+    async def fetch_events(self, time_min: datetime, time_max: datetime, user_id: str = "demo_user") -> list[NormalizedEvent]:
+        self._current_user_id = user_id
         if not self.api_key:
             logger.info("No COMPOSIO_API_KEY, skipping Salesforce fetch")
             return []
 
-        client, connected_account = self._get_client_and_account()
+        client, connected_account = self._get_client_and_account(user_id)
         if not connected_account:
             logger.info("No active Salesforce connection")
             return []

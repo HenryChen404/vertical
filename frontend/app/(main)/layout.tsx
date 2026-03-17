@@ -7,21 +7,24 @@ import { BottomTabBar } from "@/components/layout/bottom-tab-bar";
 import { FilterSortProvider } from "@/components/layout/filter-sort-context";
 import { FilterSortSheet } from "@/components/layout/filter-sort-sheet";
 import { IntroBanner } from "@/components/layout/intro-banner";
+import { AuthProvider } from "@/lib/auth-context";
 
 export default function MainLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const darkStatusBar = pathname === "/explore";
 
   return (
-    <FilterSortProvider>
-      <PhoneFrame>
-        <StatusBar dark={darkStatusBar} />
-        <div className="flex-1 overflow-y-auto">{children}</div>
-        <BottomTabBar />
-        {/* Rendered here so it can cover the BottomTabBar */}
-        <FilterSortSheet />
-        <IntroBanner />
-      </PhoneFrame>
-    </FilterSortProvider>
+    <AuthProvider>
+      <FilterSortProvider>
+        <PhoneFrame>
+          <StatusBar dark={darkStatusBar} />
+          <div className="flex-1 overflow-y-auto">{children}</div>
+          <BottomTabBar />
+          {/* Rendered here so it can cover the BottomTabBar */}
+          <FilterSortSheet />
+          <IntroBanner />
+        </PhoneFrame>
+      </FilterSortProvider>
+    </AuthProvider>
   );
 }

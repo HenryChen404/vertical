@@ -35,12 +35,14 @@ class TaskType:
 def create_workflow(
     event_id: str,
     recordings: list[dict],
+    user_id: str | None = None,
 ) -> dict:
     """Create a workflow + tasks for the given event and recordings.
 
     Args:
         event_id: UUID of the event.
         recordings: list of {"type": "plaud"|"local", "id": "..."}.
+        user_id: Optional user UUID for multi-user isolation.
 
     Returns:
         The created workflow row.
@@ -48,10 +50,13 @@ def create_workflow(
     db = get_supabase()
 
     # Create workflow
-    wf_resp = db.table("workflows").insert({
+    wf_data = {
         "event_id": event_id,
         "state": WorkflowState.TRANSCRIBING,
-    }).execute()
+    }
+    if user_id:
+        wf_data["user_id"] = user_id
+    wf_resp = db.table("workflows").insert(wf_data).execute()
     workflow = wf_resp.data[0]
     workflow_id = workflow["id"]
 

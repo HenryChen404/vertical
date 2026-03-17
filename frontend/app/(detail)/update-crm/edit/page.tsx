@@ -21,7 +21,11 @@ export default function UpdateCrmEditPage() {
     }
   }, []);
 
-  const updateField = (sectionIdx: number, fieldIdx: number, newValue: string) => {
+  const updateField = (
+    sectionIdx: number,
+    fieldIdx: number,
+    newValue: string
+  ) => {
     setSections((prev) => {
       const next = [...prev];
       next[sectionIdx] = {
@@ -41,56 +45,81 @@ export default function UpdateCrmEditPage() {
     router.push("/update-crm/processing");
   };
 
-  if (!proposal) return <div className="flex-1 flex items-center justify-center text-[#888]">Loading...</div>;
+  if (!proposal)
+    return (
+      <div className="flex-1 flex items-center justify-center text-[var(--text-gray)]">
+        Loading...
+      </div>
+    );
 
   return (
-    <div className="flex flex-col flex-1 overflow-hidden">
+    <div className="flex flex-col flex-1 overflow-hidden bg-[var(--bg-page)]">
       <BackHeader title="Update CRM" />
 
       {/* Meeting header */}
-      <div className="flex items-center gap-2 px-4 py-3 bg-[#F9F9F9]">
-        <Calendar className="w-4 h-4 text-[#888]" />
-        <span className="text-[14px] font-semibold">{proposal.recording_title}</span>
+      <div className="flex items-center gap-2 px-4 py-3 bg-[var(--bg-page)]">
+        <Calendar className="w-4 h-4 text-[var(--text-gray)]" />
+        <span className="text-[14px] font-semibold text-[var(--text-black)]">
+          {proposal.recording_title}
+        </span>
       </div>
 
       {/* Table */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto bg-white rounded-xl mx-0">
         {/* Table header */}
-        <div className="flex items-center gap-3 px-4 py-3 bg-[#F9F9F9] border-b border-[#EBEBEB]">
-          <span className="flex-1 text-[12px] font-semibold text-[#888] uppercase">Field</span>
-          <span className="flex-1 text-[12px] font-semibold text-[#888] uppercase">Old</span>
-          <span className="flex-1 text-[12px] font-semibold text-[#888] uppercase">New</span>
+        <div className="flex items-center gap-3 px-4 py-3 bg-[var(--bg-page)] rounded-t-xl">
+          <span className="w-[65px] shrink-0 text-[12px] font-semibold text-[var(--text-gray)]">
+            Field
+          </span>
+          <span className="w-[80px] shrink-0 text-[12px] font-semibold text-[var(--text-gray)]">
+            Old Value
+          </span>
+          <span className="flex-1 text-[12px] font-semibold text-[var(--text-gray)]">
+            New Value
+          </span>
         </div>
 
-        <div className="bg-white">
-          {sections.map((section, si) => (
-            <div key={section.category}>
-              <div className="px-4 py-2.5 bg-[#F9F9F9]">
-                <span className="text-[13px] font-semibold text-[#888]">{section.category}</span>
-              </div>
-              {section.fields.map((field, fi) => (
-                <div key={fi} className="flex items-center gap-3 px-4 py-3.5 border-b border-[#EBEBEB]">
-                  <span className="flex-1 text-[13px]">{field.field}</span>
-                  <span className="flex-1 text-[13px] text-[#A3A3A3]">{field.old_value}</span>
+        {sections.map((section, si) => (
+          <div key={section.category}>
+            {/* Category header */}
+            <div className="px-4 py-2.5 bg-[var(--bg-page)]">
+              <span className="text-[12px] font-semibold text-[var(--text-gray)] tracking-wider">
+                {section.category}
+              </span>
+            </div>
+
+            {/* Rows */}
+            {section.fields.map((field, fi) => (
+              <div
+                key={fi}
+                className="flex items-center gap-3 px-4 py-3.5 border-b border-[var(--border-line)]"
+              >
+                <span className="w-[65px] shrink-0 text-[14px] font-medium text-[var(--text-black)]">
+                  {field.field}
+                </span>
+                <span className="w-[80px] shrink-0 text-[14px] text-[var(--text-gray)]">
+                  {field.old_value}
+                </span>
+                <div className="flex-1">
                   <input
-                    className="flex-1 text-[13px] font-medium text-[#22C55E] bg-transparent outline-none"
+                    className="w-full h-9 bg-[var(--bg-page)] rounded-lg px-3 text-[14px] font-medium text-[var(--accent-green)] outline-none"
                     value={field.new_value}
                     onChange={(e) => updateField(si, fi, e.target.value)}
                   />
                 </div>
-              ))}
-            </div>
-          ))}
-        </div>
+              </div>
+            ))}
+          </div>
+        ))}
       </div>
 
       {/* Save button */}
       <div className="px-6 pt-4 pb-8 bg-white shrink-0">
         <button
           onClick={handleSave}
-          className="w-full h-12 bg-black text-white rounded-xl text-[15px] font-medium"
+          className="w-full h-12 bg-black text-white rounded-xl text-[16px] font-semibold"
         >
-          Save & Update CRM
+          Save Changes
         </button>
       </div>
     </div>

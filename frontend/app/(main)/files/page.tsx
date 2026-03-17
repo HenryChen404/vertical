@@ -58,7 +58,7 @@ export default function FilesPage() {
             >
               <p className="text-[16px] text-[#3D3D3D] leading-6">{file.title}</p>
               <p className="text-[13px] text-[#7A7A7A] leading-4">
-                {formatMeta(file.timestamp, file.duration_seconds)}
+                {formatMeta(file.timestamp || file.recorded_at || "", file.duration_seconds)}
               </p>
             </div>
           ))}
