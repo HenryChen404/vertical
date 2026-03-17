@@ -14,6 +14,7 @@ from adapters.salesforce import SalesforceAdapter
 from services.merge import compute_merge_key, find_merge_candidate, merge_attendees
 from services.supabase import get_supabase
 from services.sync import sync_events
+from services.workflow import on_task_completed
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -437,3 +438,44 @@ def _parse_webhook_time_str(val) -> datetime | None:
         return datetime.fromisoformat(str(val))
     except (ValueError, TypeError):
         return None
+
+
+# --- PLAUD transcription webhook ---
+
+
+@router.post("/webhooks/plaud/transcription")
+async def plaud_transcription_webhook(request: Request):
+    """Handle PLAUD transcription completion webhook.
+
+    Expected payload: { "file_id": "plaud_file_xxx", "transcript": "..." }
+    """
+    data = await request.json()
+    file_id = data.get("file_id")
+    transcript = data.get("transcript")
+
+    if not file_id or not transcript:
+        raise HTTPException(status_code=400, detail="Missing file_id or transcript")
+
+    # Find the workflow_task by recording_id
+    db = get_supabase()
+    task_resp = db.table("workflow_tasks").select("id, workflow_id").eq(
+        "recording_id", file_id
+    ).eq("type", "plaud").eq("state", 1).execute()  # 1 = TRANSCRIBING
+
+    if not task_resp.data:
+        logger.warning("No matching transcribing task for PLAUD file %s", file_id)
+        return {"status": "ignored", "reason": "no_matching_task"}
+
+    task = task_resp.data[0]
+    workflow = on_task_completed(task["id"], transcript)
+    logger.info("PLAUD transcription completed for task %s, workflow state=%s",
+                task["id"], workflow["state"])
+
+    # If all tasks done, start LangGraph
+    from services.workflow import WorkflowState
+    if workflow["state"] == WorkflowState.EXTRACTING:
+        from services.crm_graph import start_langgraph
+        import asyncio
+        asyncio.create_task(start_langgraph(workflow["id"]))
+
+    return {"status": "ok", "task_id": task["id"]}
