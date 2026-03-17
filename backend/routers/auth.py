@@ -118,7 +118,7 @@ async def callback(
         logger.info("OAuth callback success: user_id=%s, name=%s", user_id, name)
 
         is_production = bool(os.getenv("BACKEND_URL"))
-        response = RedirectResponse(f"{FRONTEND_URL}/files", status_code=302)
+        response = RedirectResponse(f"{FRONTEND_URL}/files?syncing=1", status_code=302)
         response.set_cookie(
             key="session",
             value=session_token,

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { ChevronDown } from "lucide-react";
 import { NavBar } from "@/components/layout/nav-bar";
 import { useFilterSort } from "@/components/layout/filter-sort-context";
@@ -28,6 +29,29 @@ function formatMeta(timestamp: string, seconds: number): string {
   return `${months[d.getMonth()]} ${d.getDate()} at ${timeStr}　｜　${dur}`;
 }
 
+function SyncPoller({ onData }: { onData: (files: RecordingFile[]) => void }) {
+  const searchParams = useSearchParams();
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (searchParams.get("syncing") !== "1") return;
+    let attempts = 0;
+    pollRef.current = setInterval(async () => {
+      attempts++;
+      try {
+        const data = await api.getFiles();
+        onData(data);
+        if (data.length > 0 || attempts >= 3) clearInterval(pollRef.current!);
+      } catch {
+        clearInterval(pollRef.current!);
+      }
+    }, 3000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, []);
+
+  return null;
+}
+
 export default function FilesPage() {
   const [files, setFiles] = useState<RecordingFile[]>([]);
   const { openModal } = useFilterSort();
@@ -38,6 +62,7 @@ export default function FilesPage() {
 
   return (
     <div className="bg-[#F9F9F9] min-h-full">
+      <Suspense><SyncPoller onData={setFiles} /></Suspense>
       <NavBar />
       <div className="px-6">
         {/* Title */}
