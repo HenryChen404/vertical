@@ -26,8 +26,10 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3001")
 
 
 def _get_backend_callback_url(request: Request) -> str:
-    """Build the backend callback URL from the current request."""
-    return str(request.base_url).rstrip("/") + "/api/auth/callback"
+    """Build the backend callback URL from the current request.
+    Use BACKEND_URL env var on production to avoid http→https downgrade by reverse proxy."""
+    base = os.getenv("BACKEND_URL") or str(request.base_url).rstrip("/")
+    return base.rstrip("/") + "/api/auth/callback"
 
 
 def _is_page_navigation(request: Request) -> bool:
@@ -115,12 +117,14 @@ async def callback(
 
         logger.info("OAuth callback success: user_id=%s, name=%s", user_id, name)
 
+        is_production = bool(os.getenv("BACKEND_URL"))
         response = RedirectResponse(f"{FRONTEND_URL}/files", status_code=302)
         response.set_cookie(
             key="session",
             value=session_token,
             httponly=True,
-            samesite="lax",
+            samesite="none" if is_production else "lax",
+            secure=is_production,
             max_age=SESSION_MAX_AGE,
             path="/",
         )
