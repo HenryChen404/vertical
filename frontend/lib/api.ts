@@ -3,15 +3,54 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
+    credentials: "include",
     headers: { "Content-Type": "application/json", ...options?.headers },
   });
+  if (res.status === 401 && typeof window !== "undefined") {
+    window.location.href = "/login";
+    throw new Error("Unauthorized");
+  }
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
 
 export const api = {
-  // Files
+  // Auth
+  auth: {
+    login: () => fetchApi<{ url: string }>("/api/auth/login"),
+    logout: () => fetchApi<{ success: boolean }>("/api/auth/logout", { method: "POST" }),
+    me: () =>
+      fetchApi<{
+        id: string;
+        plaud_user_id?: string;
+        name?: string;
+        avatar_url?: string;
+        authenticated: boolean;
+      }>("/api/auth/me"),
+  },
+
+  // Files / Recordings
   getFiles: () => fetchApi<import("./types").RecordingFile[]>("/api/files"),
+  uploadRecording: async (eventId: string, blob: Blob, title?: string, durationSeconds?: number) => {
+    const form = new FormData();
+    form.append("file", blob, "recording.webm");
+    if (title) form.append("title", title);
+    if (durationSeconds !== undefined) form.append("duration_seconds", String(Math.round(durationSeconds)));
+    const res = await fetch(`${API_BASE}/api/events/${eventId}/recordings/upload`, {
+      method: "POST",
+      credentials: "include",
+      body: form,
+    });
+    if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+    return res.json();
+  },
+  linkRecording: (recordingId: string, eventId: string) =>
+    fetchApi<{ success: boolean }>(`/api/recordings/${recordingId}/link`, {
+      method: "POST",
+      body: JSON.stringify({ event_id: eventId }),
+    }),
+  unlinkRecording: (recordingId: string) =>
+    fetchApi<{ success: boolean }>(`/api/recordings/${recordingId}/unlink`, { method: "POST" }),
 
   // Sales
   getSchedule: () => fetchApi<{ today: import("./types").ScheduleMeeting[]; tomorrow: import("./types").ScheduleMeeting[] }>("/api/sales/schedule"),
@@ -24,6 +63,9 @@ export const api = {
       "/api/integrations/connect",
       { method: "POST", body: JSON.stringify({ provider, redirect_url: redirectUrl }) },
     ),
+  /** Build URL for server-side 302 redirect to OAuth provider. Use with window.location.href. */
+  getConnectRedirectUrl: (provider: string, callbackUrl: string) =>
+    `${API_BASE}/api/integrations/connect/redirect?provider=${encodeURIComponent(provider)}&callback_url=${encodeURIComponent(callbackUrl)}`,
   disconnectProvider: (provider: string) =>
     fetchApi<{ success: boolean; deleted?: number }>(
       "/api/integrations/disconnect",

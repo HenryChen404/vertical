@@ -149,44 +149,10 @@ function IntegrationsContent() {
     return () => clearInterval(interval);
   }, [searchParams, router]);
 
-  const handleConnect = async (item: (typeof INTEGRATIONS)[number]) => {
+  const handleConnect = (item: (typeof INTEGRATIONS)[number]) => {
     setConnecting(item.id);
-    try {
-      const redirectUrl = `${window.location.origin}/integration?provider=${item.provider}`;
-      const result = await api.initiateConnection(item.provider, redirectUrl);
-
-      if (result.redirect_url) {
-        window.location.href = result.redirect_url;
-        return;
-      }
-
-      // Fallback mock mode
-      if (result.success) {
-        setConnected((prev) => new Set([...prev, item.id]));
-        // Verify API access
-        try {
-          const verify = await api.verifyApiAccess(item.provider);
-          if (!verify.api_enabled) {
-            await api.disconnectProvider(item.provider);
-            setConnected((prev) => {
-              const next = new Set(prev);
-              next.delete(item.id);
-              return next;
-            });
-            setApiError((prev) => ({
-              ...prev,
-              [item.id]: verify.error || "API is not enabled for this organization.",
-            }));
-          }
-        } catch {
-          // skip
-        }
-      }
-    } catch {
-      // ignore
-    } finally {
-      setConnecting(null);
-    }
+    const callbackUrl = `${window.location.origin}/integration?provider=${item.provider}`;
+    window.location.href = api.getConnectRedirectUrl(item.provider, callbackUrl);
   };
 
   const handleDisconnect = async (item: (typeof INTEGRATIONS)[number]) => {
@@ -261,14 +227,14 @@ function IntegrationsContent() {
                   ) : isConnected ? (
                     <button
                       onClick={() => handleDisconnect(item)}
-                      className="text-[14px] leading-5 text-[#177BE5] text-right"
+                      className="text-[14px] leading-5 text-[#177BE5] text-right cursor-pointer"
                     >
                       Disconnect
                     </button>
                   ) : (
                     <button
                       onClick={() => handleConnect(item)}
-                      className="text-[14px] leading-5 text-[#177BE5] text-right"
+                      className="text-[14px] leading-5 text-[#177BE5] text-right cursor-pointer"
                     >
                       Connect
                     </button>

@@ -1,14 +1,31 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from models.schemas import UnsyncedRecording, CrmChangeProposal, CrmUpdateProgress, CrmChangeSection
 from mock_data.crm_update import UNSYNCED_RECORDINGS, CRM_PROPOSAL
+from middleware.auth import get_current_user
+from services.supabase import get_supabase
 
 router = APIRouter()
 
 
-@router.get("/crm-update/recordings", response_model=list[UnsyncedRecording])
-def get_unsynced_recordings():
-    return UNSYNCED_RECORDINGS
+@router.get("/crm-update/recordings")
+def get_unsynced_recordings(request: Request, user: dict = Depends(get_current_user)):
+    """Return recordings with crm_sync_status=1 (not synced)."""
+    user_id = user["id"]
+
+    if user_id == "demo_user":
+        return UNSYNCED_RECORDINGS
+
+    db = get_supabase()
+    resp = (
+        db.table("recordings")
+        .select("id, title, duration_seconds, recorded_at, event_id")
+        .eq("user_id", user_id)
+        .eq("crm_sync_status", 1)
+        .order("recorded_at", desc=True)
+        .execute()
+    )
+    return resp.data or []
 
 
 class AnalyzeRequest(BaseModel):

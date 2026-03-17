@@ -284,7 +284,7 @@ async def _handle_salesforce_event_trigger(record_id: str) -> dict:
 
     Fetches the full Event record with relationships via SOQL, then upserts.
     """
-    client, account = _salesforce_adapter._get_client_and_account()
+    client, account = _salesforce_adapter._get_client_and_account()  # Webhooks use default user
     if not client or not account:
         logger.warning("No Salesforce connection for event enrichment, falling back to full sync")
         result = await sync_events(days_ahead=7)

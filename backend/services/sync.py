@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 
-from adapters.base import NormalizedEvent
+from adapters.base import BaseAdapter, NormalizedEvent
 from adapters.google_calendar import GoogleCalendarAdapter
 from adapters.salesforce import SalesforceAdapter
 from services.merge import compute_merge_key, find_merge_candidate, merge_attendees
@@ -11,26 +12,61 @@ from services.supabase import get_supabase
 
 logger = logging.getLogger(__name__)
 
-# All adapters to pull from
-ADAPTERS = [
-    GoogleCalendarAdapter(),
-    SalesforceAdapter(),
-    # OutlookCalendarAdapter(),
-]
+# Map Composio toolkit slug → adapter instance
+TOOLKIT_ADAPTER_MAP: dict[str, BaseAdapter] = {
+    "salesforce": SalesforceAdapter(),
+    "googlecalendar": GoogleCalendarAdapter(),
+    # "outlookcalendar": OutlookCalendarAdapter(),
+}
 
 
-async def sync_events(days_ahead: int = 7) -> dict:
-    """Full sync: fetch from all sources, merge, upsert to Supabase."""
+def _get_connected_adapters(user_id: str) -> list[BaseAdapter]:
+    """Return only adapters whose provider the user has actively connected."""
+    api_key = os.getenv("COMPOSIO_API_KEY")
+    if not api_key:
+        # No Composio configured — fall back to all adapters (dev/mock mode)
+        logger.info("Sync: no COMPOSIO_API_KEY, using all adapters")
+        return list(TOOLKIT_ADAPTER_MAP.values())
+
+    from composio import Composio
+    client = Composio(api_key=api_key)
+
+    connected: list[BaseAdapter] = []
+    for toolkit_slug, adapter in TOOLKIT_ADAPTER_MAP.items():
+        try:
+            result = client.connected_accounts.list(
+                user_ids=[user_id],
+                toolkit_slugs=[toolkit_slug],
+                statuses=["ACTIVE"],
+            )
+            if result.items:
+                connected.append(adapter)
+                logger.info("Sync: user %s has active %s connection", user_id, toolkit_slug)
+            else:
+                logger.info("Sync: user %s has no %s connection, skipping", user_id, toolkit_slug)
+        except Exception as e:
+            logger.warning("Sync: failed to check %s connection for user %s: %s", toolkit_slug, user_id, e)
+
+    return connected
+
+
+async def sync_events(days_ahead: int = 7, user_id: str = "demo_user") -> dict:
+    """Full sync: fetch from connected sources, merge, upsert to Supabase."""
     now = datetime.now(timezone.utc)
     time_min = now - timedelta(days=1)  # include today's past events
     time_max = now + timedelta(days=days_ahead)
 
+    adapters = _get_connected_adapters(user_id)
+    if not adapters:
+        logger.info("Sync: no connected adapters for user %s, nothing to do", user_id)
+        return {"fetched": 0, "merged": 0, "created": 0, "updated": 0}
+
     all_normalized: list[NormalizedEvent] = []
-    for adapter in ADAPTERS:
+    for adapter in adapters:
         try:
             logger.info("Sync: fetching from %s (range %s to %s)",
                         type(adapter).__name__, time_min.isoformat(), time_max.isoformat())
-            events = await adapter.fetch_events(time_min, time_max)
+            events = await adapter.fetch_events(time_min, time_max, user_id=user_id)
             logger.info("Sync: %s returned %d events", type(adapter).__name__, len(events))
             all_normalized.extend(events)
         except Exception as e:
@@ -45,9 +81,14 @@ async def sync_events(days_ahead: int = 7) -> dict:
     updated = 0
 
     # Load existing events in the time range for merge matching
-    existing_resp = db.table("events").select("*").gte(
+    query = db.table("events").select("*").gte(
         "start_time", time_min.isoformat()
-    ).lte("start_time", time_max.isoformat()).execute()
+    ).lte("start_time", time_max.isoformat())
+
+    if user_id != "demo_user":
+        query = query.eq("user_id", user_id)
+
+    existing_resp = query.execute()
     existing_events = existing_resp.data or []
 
     for event in all_normalized:
@@ -101,12 +142,15 @@ async def sync_events(days_ahead: int = 7) -> dict:
             db.table("events").update(merge_update).eq("id", candidate["id"]).execute()
 
             # Add source link
-            db.table("event_sources").insert({
+            source_data = {
                 "event_id": candidate["id"],
                 "source": event.source,
                 "source_id": event.source_id,
                 "raw_data": event.raw_data,
-            }).execute()
+            }
+            if user_id != "demo_user":
+                source_data["user_id"] = user_id
+            db.table("event_sources").insert(source_data).execute()
 
             updated += 1
         else:
@@ -123,16 +167,21 @@ async def sync_events(days_ahead: int = 7) -> dict:
             }
             if event.sales_details is not None:
                 insert_data["sales_details"] = event.sales_details
+            if user_id != "demo_user":
+                insert_data["user_id"] = user_id
             insert_resp = db.table("events").insert(insert_data).execute()
 
             merged_id = insert_resp.data[0]["id"]
 
-            db.table("event_sources").insert({
+            source_data = {
                 "event_id": merged_id,
                 "source": event.source,
                 "source_id": event.source_id,
                 "raw_data": event.raw_data,
-            }).execute()
+            }
+            if user_id != "demo_user":
+                source_data["user_id"] = user_id
+            db.table("event_sources").insert(source_data).execute()
 
             # Add to existing_events for subsequent merge matching
             existing_events.append(insert_resp.data[0])

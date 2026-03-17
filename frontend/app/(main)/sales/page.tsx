@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { ChevronDown, RefreshCw, X, CheckCircle2 } from "lucide-react";
+import { ChevronDown, X, CheckCircle2 } from "lucide-react";
 import { NavBar } from "@/components/layout/nav-bar";
 import { useFilterSort } from "@/components/layout/filter-sort-context";
 import { api } from "@/lib/api";
@@ -127,7 +127,7 @@ function StatusBanner({
     return (
       <div className="bg-white rounded-[5px] flex items-center gap-4 p-3">
         <div className="flex items-center gap-2 flex-1">
-          <RefreshCw className="w-6 h-6 text-[#3D3D3D] shrink-0" strokeWidth={1.5} />
+          <Image src="/icons/icon-crm-update.svg" alt="" width={24} height={24} className="shrink-0" />
           <p className="text-[14px] leading-5 text-[#3D3D3D]">
             {unsyncedCount} new file{unsyncedCount !== 1 ? "s are" : " is"} ready to update your CRM
           </p>
@@ -191,15 +191,14 @@ export default function SalesPage() {
     // Determine banner state
     async function checkBanner() {
       try {
-        const [crm, calendar, recordings] = await Promise.all([
-          api.getCrmStatus(),
-          api.getCalendarStatus(),
-          api.getUnsyncedRecordings(),
-        ]);
-        const connectedCount = [crm.connected, calendar.connected].filter(Boolean).length;
-        if (connectedCount < 2) {
+        const crm = await api.getCrmStatus();
+        if (!crm.connected) {
           setBannerState("connect");
-        } else if (recordings.length > 0) {
+          return;
+        }
+        // CRM connected — check for unsynced recordings
+        const recordings = await api.getUnsyncedRecordings();
+        if (recordings.length > 0) {
           setUnsyncedCount(recordings.length);
           setBannerState("update");
         } else {

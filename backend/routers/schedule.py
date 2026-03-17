@@ -54,28 +54,45 @@ def _format_duration(seconds) -> str:
 
 
 def _fetch_linked_files(db, event_id: str) -> list[dict]:
-    """Fetch recordings and linked PLAUD files for an event."""
-    # Local recordings
-    rec_resp = db.table("recordings").select("*").eq("event_id", event_id).order("created_at").execute()
-    # Linked PLAUD files
-    link_resp = db.table("event_file_links").select("*").eq("event_id", event_id).order("created_at").execute()
+    """Fetch PLAUD recordings (source_type=1) linked to an event."""
+    resp = (
+        db.table("recordings")
+        .select("id, title, duration_seconds, recorded_at, plaud_file_id")
+        .eq("event_id", event_id)
+        .eq("source_type", 1)
+        .order("created_at")
+        .execute()
+    )
+    return [
+        {
+            "id": r["id"],
+            "title": r.get("title") or "PLAUD File",
+            "duration_seconds": r.get("duration_seconds") or 0,
+            "recorded_at": r.get("recorded_at"),
+            "plaud_file_id": r.get("plaud_file_id"),
+        }
+        for r in (resp.data or [])
+    ]
 
-    files = []
-    for r in rec_resp.data or []:
-        files.append({
+
+def _fetch_feedback_recordings(db, event_id: str) -> list[dict]:
+    """Fetch local recordings (source_type=2) for an event's feedback."""
+    resp = (
+        db.table("recordings")
+        .select("id, title, duration_seconds, created_at")
+        .eq("event_id", event_id)
+        .eq("source_type", 2)
+        .order("created_at")
+        .execute()
+    )
+    return [
+        {
             "id": r["id"],
             "title": r.get("title") or "Recording",
-            "duration": _format_duration(r.get("duration_seconds")),
-            "type": "local",
-        })
-    for l in link_resp.data or []:
-        files.append({
-            "id": l["id"],
-            "title": "PLAUD File",
-            "plaud_file_id": l["plaud_file_id"],
-            "type": "plaud",
-        })
-    return files
+            "duration_seconds": r.get("duration_seconds") or 0,
+        }
+        for r in (resp.data or [])
+    ]
 
 
 def _transform_event_to_meeting_detail(event: dict, db=None) -> dict:
@@ -136,6 +153,7 @@ def _transform_event_to_meeting_detail(event: dict, db=None) -> dict:
         "attendees": attendees,
         "feedback": "",
         "linked_files": _fetch_linked_files(db, event["id"]) if db else [],
+        "feedback_recordings": _fetch_feedback_recordings(db, event["id"]) if db else [],
     }
 
 

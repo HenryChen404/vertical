@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 
 class LinkFileRequest(BaseModel):
     plaud_file_id: str
+    title: str | None = None
+    duration_seconds: int | None = None
 
 
 @router.get("/events/{event_id}/linked-files")
@@ -41,10 +43,15 @@ def link_file(event_id: str, req: LinkFileRequest):
 
     # Insert link (unique constraint prevents duplicates)
     try:
-        resp = db.table("event_file_links").insert({
+        row = {
             "event_id": event_id,
             "plaud_file_id": req.plaud_file_id,
-        }).execute()
+        }
+        if req.title:
+            row["title"] = req.title
+        if req.duration_seconds is not None:
+            row["duration_seconds"] = req.duration_seconds
+        resp = db.table("event_file_links").insert(row).execute()
     except Exception as e:
         error_str = str(e)
         if "duplicate" in error_str.lower() or "unique" in error_str.lower():

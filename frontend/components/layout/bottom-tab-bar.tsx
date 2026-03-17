@@ -33,8 +33,8 @@ export function BottomTabBar() {
               "shadow-[0px_10px_10px_0px_rgba(0,0,0,0.1)]"
             )}
           >
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-              <path d="M12 5V19M5 12H19" stroke="white" strokeWidth="2" strokeLinecap="round" />
+            <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+              <path d="M22 12H15C13.3431 12 12 13.3431 12 15V22H10V15C10 12.2386 12.2386 10 15 10H22V12ZM12 7C12 9.76142 9.76142 12 7 12H0V10H7C8.65685 10 10 8.65685 10 7V0H12V7Z" fill="white"/>
             </svg>
           </button>
         </div>
