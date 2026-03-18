@@ -535,42 +535,110 @@ def _parse_webhook_time_str(val) -> datetime | None:
         return None
 
 
-# --- PLAUD transcription webhook ---
+# --- ElevenLabs transcription webhook ---
 
 
-@router.post("/webhooks/plaud/transcription")
-async def plaud_transcription_webhook(request: Request):
-    """Handle PLAUD transcription completion webhook.
+def _verify_elevenlabs_webhook(body: bytes, signature_header: str | None) -> dict:
+    """Verify ElevenLabs webhook signature using the SDK and return the event.
 
-    Expected payload: { "file_id": "plaud_file_xxx", "transcript": "..." }
+    Raises HTTPException(401) on failure.
     """
-    data = await request.json()
-    file_id = data.get("file_id")
-    transcript = data.get("transcript")
+    from services.transcription import elevenlabs_client
 
-    if not file_id or not transcript:
-        raise HTTPException(status_code=400, detail="Missing file_id or transcript")
+    secret = os.getenv("ELEVENLABS_WEBHOOK_SECRET")
+    if not secret:
+        # No secret — skip verification (local dev), just parse JSON
+        import json
+        return json.loads(body)
+    if not signature_header:
+        raise HTTPException(status_code=401, detail="Missing elevenlabs-signature header")
 
-    # Find the workflow_task by recording_id
+    try:
+        event = elevenlabs_client.webhooks.construct_event(
+            rawBody=body.decode("utf-8"),
+            sig_header=signature_header,
+            secret=secret,
+        )
+        return event
+    except Exception as e:
+        logger.warning("ElevenLabs webhook signature verification failed: %s", e)
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+
+
+@router.post("/webhooks/elevenlabs/transcription")
+async def elevenlabs_transcription_webhook(request: Request):
+    """Handle ElevenLabs STT webhook callback.
+
+    ElevenLabs sends the transcription result to this endpoint when
+    webhook=true was set in the original STT request.
+
+    The payload includes:
+    - status: "completed" | "failed"
+    - text: the transcript (when completed)
+    - webhook_metadata: JSON string we passed in the original request,
+      containing {"task_id": "...", "plaud_file_id": "..."}
+    """
+    raw_body = await request.body()
+    sig = request.headers.get("elevenlabs-signature")
+
+    event = _verify_elevenlabs_webhook(raw_body, sig)
+
+    # The SDK returns a dict from json.loads(rawBody)
+    # Top-level structure: {type, event_timestamp, data: {... actual payload ...}}
+    raw_event = event if isinstance(event, dict) else (event.__dict__ if hasattr(event, "__dict__") else await request.json())
+    data = raw_event.get("data", raw_event) if isinstance(raw_event, dict) else raw_event
+
+    # Parse metadata to find our task_id
+    metadata_raw = data.get("webhook_metadata") or data.get("metadata") or "{}"
+    if isinstance(metadata_raw, str):
+        import json
+        try:
+            metadata = json.loads(metadata_raw)
+        except json.JSONDecodeError:
+            metadata = {}
+    else:
+        metadata = metadata_raw
+
+    task_id = metadata.get("task_id")
+    # ElevenLabs nests the transcript under data.transcription.text
+    transcription_obj = data.get("transcription", {})
+    status = data.get("status", "").lower()
+    transcript = transcription_obj.get("text", "") if isinstance(transcription_obj, dict) else ""
+
+
+    if not task_id:
+        logger.warning("ElevenLabs webhook missing task_id in metadata: %s (full data keys: %s)", metadata, list(data.keys()) if isinstance(data, dict) else "n/a")
+        return {"status": "ignored", "reason": "no_task_id"}
+
     db = get_supabase()
+
+    # Verify task exists and is in TRANSCRIBING state
     task_resp = db.table("workflow_tasks").select("id, workflow_id").eq(
-        "recording_id", file_id
-    ).eq("type", "plaud").eq("state", 1).execute()  # 1 = TRANSCRIBING
+        "id", task_id
+    ).eq("state", 1).execute()  # 1 = TRANSCRIBING
 
     if not task_resp.data:
-        logger.warning("No matching transcribing task for PLAUD file %s", file_id)
+        logger.warning("No matching transcribing task %s", task_id)
         return {"status": "ignored", "reason": "no_matching_task"}
 
     task = task_resp.data[0]
-    workflow = on_task_completed(task["id"], transcript)
-    logger.info("PLAUD transcription completed for task %s, workflow state=%s",
-                task["id"], workflow["state"])
 
-    # If all tasks done, start LangGraph
+    if status == "failed" or not transcript:
+        error_msg = data.get("error", "ElevenLabs transcription failed")
+        from services.workflow import on_task_failed
+        on_task_failed(task_id, error_msg)
+        logger.error("ElevenLabs transcription failed for task %s: %s", task_id, error_msg)
+        return {"status": "ok", "action": "failed", "task_id": task_id}
+
+    workflow = on_task_completed(task["id"], transcript)
+    logger.info("ElevenLabs transcription completed for task %s (%d chars), workflow state=%s",
+                task_id, len(transcript), workflow["state"])
+
+    # If all tasks done, start LangGraph extraction
     from services.workflow import WorkflowState
     if workflow["state"] == WorkflowState.EXTRACTING:
         from services.crm_graph import start_langgraph
         import asyncio
         asyncio.create_task(start_langgraph(workflow["id"]))
 
-    return {"status": "ok", "task_id": task["id"]}
+    return {"status": "ok", "task_id": task_id}

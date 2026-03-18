@@ -101,10 +101,31 @@ export const api = {
 
   // CRM Update
   getUnsyncedRecordings: () => fetchApi<import("./types").UnsyncedRecording[]>("/api/crm-update/recordings"),
-  analyzeRecordings: (ids: string[]) => fetchApi<import("./types").CrmChangeProposal>("/api/crm-update/analyze", { method: "POST", body: JSON.stringify({ recording_ids: ids }) }),
-  confirmSection: (sessionId: string, category: string) => fetchApi<{ success: boolean }>("/api/crm-update/confirm", { method: "POST", body: JSON.stringify({ session_id: sessionId, category }) }),
-  confirmAll: (sessionId: string) => fetchApi<{ success: boolean }>("/api/crm-update/confirm-all", { method: "POST", body: JSON.stringify({ session_id: sessionId }) }),
-  saveChanges: (sessionId: string, sections: import("./types").CrmChangeSection[]) => fetchApi<{ success: boolean }>("/api/crm-update/changes", { method: "PUT", body: JSON.stringify({ session_id: sessionId, sections }) }),
-  applyChanges: (sessionId: string) => fetchApi<{ success: boolean }>("/api/crm-update/apply", { method: "POST", body: JSON.stringify({ session_id: sessionId }) }),
-  getUpdateStatus: (sessionId: string) => fetchApi<import("./types").CrmUpdateProgress>(`/api/crm-update/status?session_id=${sessionId}`),
+
+  // Workflows (real CRM update pipeline)
+  createWorkflow: (recordingIds: string[], eventId?: string) =>
+    fetchApi<import("./types").Workflow>("/api/workflows", {
+      method: "POST",
+      body: JSON.stringify({
+        event_id: eventId ?? null,
+        recordings: recordingIds.map((id) => ({ type: "plaud", id })),
+      }),
+    }),
+  getWorkflow: (id: string) => fetchApi<import("./types").Workflow>(`/api/workflows/${id}`),
+  streamWorkflow: (id: string) => {
+    const url = `${API_BASE}/api/workflows/${id}/stream`;
+    return new EventSource(url, { withCredentials: true });
+  },
+  chatWorkflow: (id: string, message: string) =>
+    fetchApi<{ extractions: Record<string, unknown>; messages: unknown[]; should_push: boolean }>(
+      `/api/workflows/${id}/chat`,
+      { method: "POST", body: JSON.stringify({ message }) },
+    ),
+  updateExtractions: (id: string, extractions: Record<string, unknown>) =>
+    fetchApi<unknown>(`/api/workflows/${id}/extractions`, {
+      method: "PUT",
+      body: JSON.stringify({ extractions }),
+    }),
+  confirmWorkflow: (id: string) =>
+    fetchApi<{ status: string }>(`/api/workflows/${id}/confirm`, { method: "POST" }),
 };

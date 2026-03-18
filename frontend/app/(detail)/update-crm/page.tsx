@@ -26,10 +26,19 @@ export default function UpdateCrmSelectPage() {
   const visible = showAll ? recordings : recordings.slice(0, 2);
   const hiddenCount = recordings.length - 2;
 
-  const handleContinue = () => {
-    if (selectedIds.length === 0) return;
-    sessionStorage.setItem("crm_selected_ids", JSON.stringify(selectedIds));
-    router.push("/update-crm/review");
+  const [creating, setCreating] = useState(false);
+
+  const handleContinue = async () => {
+    if (selectedIds.length === 0 || creating) return;
+    setCreating(true);
+    try {
+      const workflow = await api.createWorkflow(selectedIds);
+      sessionStorage.setItem("crm_workflow_id", workflow.id);
+      router.push("/update-crm/review");
+    } catch (e) {
+      console.error("Failed to create workflow:", e);
+      setCreating(false);
+    }
   };
 
   return (
@@ -120,10 +129,10 @@ export default function UpdateCrmSelectPage() {
       <div className="px-6 pt-4 pb-8 bg-[var(--bg-page)] shrink-0">
         <button
           onClick={handleContinue}
-          disabled={selectedIds.length === 0}
+          disabled={selectedIds.length === 0 || creating}
           className="w-full py-4 bg-black text-white rounded-[14px] text-[17px] font-semibold disabled:opacity-40"
         >
-          Continue ({selectedIds.length} selected)
+          {creating ? "Creating..." : `Continue (${selectedIds.length} selected)`}
         </button>
       </div>
     </div>

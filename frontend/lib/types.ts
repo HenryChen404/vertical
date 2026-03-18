@@ -180,3 +180,32 @@ export interface UnsyncedRecording {
   crm_tags?: CrmRecordingTag[];
 }
 
+// Workflow states: 0=CREATED, 1=TRANSCRIBING, 2=EXTRACTING, 3=REVIEW, 4=PUSHING, 5=DONE, 6=FAILED
+export interface WorkflowTask {
+  id: string;
+  workflow_id: string;
+  type: "plaud" | "local";
+  recording_id: string;
+  state: number;
+  transcript?: string;
+  error?: string;
+}
+
+export interface Workflow {
+  id: string;
+  event_id: string | null;
+  state: number;
+  extractions?: Record<string, { status: string; data?: Record<string, unknown>; error?: string }>;
+  original_values?: Record<string, Record<string, unknown>>;
+  tasks?: WorkflowTask[];
+}
+
+export interface WorkflowStreamEvent {
+  workflow_state: number;
+  tasks_total: number;
+  tasks_completed: number;
+  tasks_failed: number;
+  message?: string;
+  extractions?: Record<string, { status: string; data?: Record<string, unknown>; error?: string }>;
+}
+

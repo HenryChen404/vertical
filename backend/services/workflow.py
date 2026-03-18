@@ -33,14 +33,14 @@ class TaskType:
 
 
 def create_workflow(
-    event_id: str,
+    event_id: str | None,
     recordings: list[dict],
     user_id: str | None = None,
 ) -> dict:
     """Create a workflow + tasks for the given event and recordings.
 
     Args:
-        event_id: UUID of the event.
+        event_id: UUID of the event (optional — may be None for CRM batch updates).
         recordings: list of {"type": "plaud"|"local", "id": "..."}.
         user_id: Optional user UUID for multi-user isolation.
 
@@ -48,6 +48,14 @@ def create_workflow(
         The created workflow row.
     """
     db = get_supabase()
+
+    # If no event_id provided, try to find one from the first recording
+    if not event_id:
+        for rec in recordings:
+            rec_resp = db.table("recordings").select("event_id").eq("id", rec["id"]).execute()
+            if rec_resp.data and rec_resp.data[0].get("event_id"):
+                event_id = rec_resp.data[0]["event_id"]
+                break
 
     # Create workflow
     wf_data = {

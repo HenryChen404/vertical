@@ -110,9 +110,12 @@ async def push_to_crm(state: CrmWorkflowState) -> dict:
     # Get the event to find related Salesforce IDs
     db = get_supabase()
     wf_resp = db.table("workflows").select("event_id").eq("id", state["workflow_id"]).execute()
-    event_id = wf_resp.data[0]["event_id"]
-    event_resp = db.table("events").select("sales_details").eq("id", event_id).execute()
-    sales_details = (event_resp.data[0] or {}).get("sales_details") or {}
+    event_id = wf_resp.data[0].get("event_id")
+    sales_details = {}
+    if event_id:
+        event_resp = db.table("events").select("sales_details").eq("id", event_id).execute()
+        if event_resp.data:
+            sales_details = (event_resp.data[0] or {}).get("sales_details") or {}
 
     try:
         # Update Opportunity
@@ -178,11 +181,16 @@ builder.add_edge("push_to_crm", END)
 
 
 async def get_graph():
-    """Compile the graph with Postgres checkpointer."""
+    """Compile the graph with a fresh Postgres checkpointer per invocation."""
     db_uri = os.getenv("SUPABASE_DB_URI")
     if not db_uri:
         raise RuntimeError("SUPABASE_DB_URI not set")
-    checkpointer = AsyncPostgresSaver.from_conn_string(db_uri)
+
+    from psycopg_pool import AsyncConnectionPool
+
+    pool = AsyncConnectionPool(conninfo=db_uri, open=False)
+    await pool.open()
+    checkpointer = AsyncPostgresSaver(pool)
     await checkpointer.setup()
     return builder.compile(checkpointer=checkpointer)
 
@@ -225,7 +233,10 @@ async def _fetch_original_values(workflow_id: str) -> dict:
     if not wf_resp.data:
         return {}
 
-    event_id = wf_resp.data[0]["event_id"]
+    event_id = wf_resp.data[0].get("event_id")
+    if not event_id:
+        return {}
+
     event_resp = db.table("events").select("sales_details").eq("id", event_id).execute()
     if not event_resp.data:
         return {}
