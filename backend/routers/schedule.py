@@ -1,13 +1,25 @@
 import asyncio
 import json
+import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File
+from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
 from services.supabase import get_supabase
+from services.transcription import transcribe_audio_bytes
 from mock_data.schedule import MEETINGS, TRANSCRIPT_LINES
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+# In-memory feedback storage for mock meetings (resets on restart)
+_mock_feedback_store: dict[str, str] = {}
+
+
+class FeedbackUpdate(BaseModel):
+    feedback: str
 
 
 def _format_currency(amount) -> str:
@@ -75,25 +87,6 @@ def _fetch_linked_files(db, event_id: str) -> list[dict]:
     ]
 
 
-def _fetch_feedback_recordings(db, event_id: str) -> list[dict]:
-    """Fetch local recordings (source_type=2) for an event's feedback."""
-    resp = (
-        db.table("recordings")
-        .select("id, title, duration_seconds, created_at")
-        .eq("event_id", event_id)
-        .eq("source_type", 2)
-        .order("created_at")
-        .execute()
-    )
-    return [
-        {
-            "id": r["id"],
-            "title": r.get("title") or "Recording",
-            "duration_seconds": r.get("duration_seconds") or 0,
-        }
-        for r in (resp.data or [])
-    ]
-
 
 def _transform_event_to_meeting_detail(event: dict, db=None) -> dict:
     """Transform a Supabase event row into MeetingDetail response format."""
@@ -109,7 +102,18 @@ def _transform_event_to_meeting_detail(event: dict, db=None) -> dict:
 
     # Opportunity info
     opp = sales.get("opportunity") or {}
+    # Resolve SF opportunity ID to local deal UUID
+    deal_id = ""
+    sf_opp_id = opp.get("id", "")
+    if sf_opp_id and db:
+        try:
+            deal_resp = db.table("deals").select("id").eq("external_id", sf_opp_id).execute()
+            if deal_resp.data:
+                deal_id = deal_resp.data[0]["id"]
+        except Exception:
+            pass
     opportunity = {
+        "id": deal_id,
         "name": opp.get("name", ""),
         "amount": _format_currency(opp.get("amount")),
         "stage": opp.get("stage", ""),
@@ -124,8 +128,8 @@ def _transform_event_to_meeting_detail(event: dict, db=None) -> dict:
         attendees.append({
             "id": p.get("id", ""),
             "name": p.get("name", email),
-            "title": "",
-            "company": "",
+            "title": p.get("title", ""),
+            "company": p.get("company", ""),
             "status": p.get("status", ""),
         })
         if email:
@@ -151,9 +155,8 @@ def _transform_event_to_meeting_detail(event: dict, db=None) -> dict:
         "account": account,
         "opportunity": opportunity,
         "attendees": attendees,
-        "feedback": "",
+        "feedback": event.get("feedback") or "",
         "linked_files": _fetch_linked_files(db, event["id"]) if db else [],
-        "feedback_recordings": _fetch_feedback_recordings(db, event["id"]) if db else [],
     }
 
 
@@ -174,7 +177,52 @@ def get_meeting(meeting_id: str):
     meeting = MEETINGS.get(meeting_id)
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
-    return meeting
+    result = {**meeting}
+    if meeting_id in _mock_feedback_store:
+        result["feedback"] = _mock_feedback_store[meeting_id]
+    return result
+
+
+@router.put("/schedule/{meeting_id}/feedback")
+def update_feedback(meeting_id: str, body: FeedbackUpdate):
+    # Try to persist in Supabase
+    try:
+        db = get_supabase()
+        resp = db.table("events").select("id").eq("id", meeting_id).execute()
+        if resp.data:
+            db.table("events").update({"feedback": body.feedback}).eq("id", meeting_id).execute()
+            return {"success": True, "feedback": body.feedback}
+    except Exception:
+        pass
+
+    # Fallback: in-memory for mock meetings
+    _mock_feedback_store[meeting_id] = body.feedback
+    return {"success": True, "feedback": body.feedback}
+
+
+@router.post("/schedule/{meeting_id}/feedback/transcribe")
+async def transcribe_feedback(meeting_id: str, file: UploadFile = File(...)):
+    """Transcribe an audio recording and save as feedback."""
+    audio_bytes = await file.read()
+
+    try:
+        text = await transcribe_audio_bytes(audio_bytes)
+    except Exception as e:
+        logger.error("Transcription failed for meeting %s: %s", meeting_id, e)
+        raise HTTPException(status_code=502, detail=f"Transcription failed: {e}")
+
+    # Save feedback
+    try:
+        db = get_supabase()
+        resp = db.table("events").select("id").eq("id", meeting_id).execute()
+        if resp.data:
+            db.table("events").update({"feedback": text}).eq("id", meeting_id).execute()
+        else:
+            _mock_feedback_store[meeting_id] = text
+    except Exception:
+        _mock_feedback_store[meeting_id] = text
+
+    return {"success": True, "feedback": text}
 
 
 @router.post("/schedule/{meeting_id}/recording/start")

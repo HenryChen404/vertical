@@ -14,18 +14,27 @@ from services.supabase import get_supabase
 logger = logging.getLogger(__name__)
 
 
-def _get_elevenlabs_client() -> ElevenLabs:
-    return ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY", ""))
+elevenlabs_client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY", ""))
 
 
 def _sync_transcribe(file_bytes: bytes) -> str:
     """Synchronous ElevenLabs call (to be run in a thread)."""
-    client = _get_elevenlabs_client()
+    client = elevenlabs_client
     result = client.speech_to_text.convert(
         file=file_bytes,
         model_id="scribe_v2",
     )
     return result.text
+
+
+async def transcribe_audio_bytes(file_bytes: bytes) -> str:
+    """Transcribe raw audio bytes via ElevenLabs Scribe v2.
+
+    Used for feedback voice recording (no Supabase storage involved).
+    """
+    transcript = await asyncio.to_thread(_sync_transcribe, file_bytes)
+    logger.info("Transcribed audio bytes: %d chars", len(transcript))
+    return transcript
 
 
 async def transcribe_local(recording_id: str) -> str:

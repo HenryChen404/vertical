@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import logging
-import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
-from typing import Optional
 
 from middleware.auth import get_current_user
 from services.supabase import get_supabase
@@ -14,58 +12,6 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 BUCKET = "recordings"
-
-
-@router.post("/events/{event_id}/recordings/upload")
-async def upload_recording(
-    event_id: str,
-    request: Request,
-    file: UploadFile = File(...),
-    title: Optional[str] = Form(None),
-    duration_seconds: Optional[int] = Form(None),
-    user: dict = Depends(get_current_user),
-):
-    """Upload an audio recording and attach it to an event."""
-    db = get_supabase()
-
-    # Verify event exists
-    event_resp = db.table("events").select("id").eq("id", event_id).execute()
-    if not event_resp.data:
-        raise HTTPException(status_code=404, detail="Event not found")
-
-    recording_id = str(uuid.uuid4())
-    ext = file.filename.rsplit(".", 1)[-1] if file.filename and "." in file.filename else "webm"
-    storage_path = f"{event_id}/{recording_id}.{ext}"
-
-    # Read file content
-    content = await file.read()
-
-    # Upload to Supabase Storage
-    try:
-        db.storage.from_(BUCKET).upload(
-            storage_path,
-            content,
-            {"content-type": file.content_type or "audio/webm"},
-        )
-    except Exception as e:
-        logger.error("Storage upload failed: %s", e)
-        raise HTTPException(status_code=502, detail=f"Storage upload failed: {e}")
-
-    # Insert metadata row
-    row = {
-        "id": recording_id,
-        "event_id": event_id,
-        "source_type": 2,  # local
-        "title": title,
-        "duration_seconds": duration_seconds,
-        "storage_path": storage_path,
-    }
-    if user["id"] != "demo_user":
-        row["user_id"] = user["id"]
-
-    insert_resp = db.table("recordings").insert(row).execute()
-
-    return insert_resp.data[0]
 
 
 @router.get("/events/{event_id}/recordings")

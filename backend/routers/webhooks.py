@@ -87,6 +87,38 @@ async def composio_webhook(request: Request):
         return {"status": "ok", "action": "full_sync", "sync": result}
 
 
+def _resolve_user_id(source: str) -> str | None:
+    """Resolve user_id for webhook events via user_integrations mapping."""
+    try:
+        db = get_supabase()
+        # Map webhook source to provider name in user_integrations
+        provider_map = {
+            "google_calendar": "google",
+            "outlook_calendar": "outlook",
+            "salesforce": "salesforce",
+        }
+        provider = provider_map.get(source)
+        if provider:
+            resp = (
+                db.table("user_integrations")
+                .select("user_id")
+                .eq("provider", provider)
+                .eq("connected", True)
+                .limit(1)
+                .execute()
+            )
+            if resp.data:
+                return resp.data[0]["user_id"]
+
+        # Fallback: pick most recent user
+        resp = db.table("users").select("id").order("updated_at", desc=True).limit(1).execute()
+        if resp.data:
+            return resp.data[0]["id"]
+    except Exception as e:
+        logger.warning("Failed to resolve user_id for source %s: %s", source, e)
+    return None
+
+
 async def _handle_upsert(data: dict) -> dict:
     """Handle event creation or update from webhook payload."""
     source, source_id, event_data = _extract_event_info(data)
@@ -104,6 +136,9 @@ async def _handle_upsert(data: dict) -> dict:
 
     # Enrich with related entities (Account, Opportunity, Participants)
     sales_details = _enrich_salesforce_event(source, source_id, event_data)
+
+    # Resolve user_id from connected integrations
+    user_id = _resolve_user_id(source)
 
     db = get_supabase()
 
@@ -126,6 +161,8 @@ async def _handle_upsert(data: dict) -> dict:
         }
         if sales_details:
             update_data["sales_details"] = sales_details
+        if user_id:
+            update_data["user_id"] = user_id
         db.table("events").update(update_data).eq("id", source_row["event_id"]).execute()
 
         db.table("event_sources").update({
@@ -184,6 +221,8 @@ async def _handle_upsert(data: dict) -> dict:
     }
     if sales_details:
         insert_data["sales_details"] = sales_details
+    if user_id:
+        insert_data["user_id"] = user_id
     insert_resp = db.table("events").insert(insert_data).execute()
 
     event_id = insert_resp.data[0]["id"]
@@ -268,6 +307,9 @@ async def _handle_trigger_event(data: dict) -> dict:
     if sobject == "Event" and record_id:
         return await _handle_salesforce_event_trigger(record_id)
 
+    if sobject == "Opportunity" and record_id:
+        return await _handle_salesforce_opportunity_trigger(record_id)
+
     # Try as standard upsert
     source, source_id, _ = _extract_event_info(data)
     if source and source_id:
@@ -312,6 +354,59 @@ async def _handle_salesforce_event_trigger(record_id: str) -> dict:
     }
 
     return await _handle_upsert(enriched_data)
+
+
+async def _handle_salesforce_opportunity_trigger(record_id: str) -> dict:
+    """Handle a Salesforce Opportunity update from the Generic SObject trigger."""
+    user_id = _resolve_user_id("salesforce")
+
+    opp = _salesforce_adapter.fetch_single_opportunity(
+        record_id, user_id=user_id or "demo_user"
+    )
+    if not opp:
+        logger.warning("Could not fetch Opportunity %s", record_id)
+        return {"status": "ok", "action": "ignored", "reason": "fetch_failed"}
+
+    db = get_supabase()
+
+    sf_opp_id = opp["id"]
+
+    # If opportunity is closed, remove from deals table
+    if opp.get("is_closed"):
+        db.table("deals").delete().eq("external_id", sf_opp_id).execute()
+        logger.info("Deleted closed deal (sf_id=%s)", sf_opp_id)
+        return {"status": "ok", "action": "deleted", "external_id": sf_opp_id}
+
+    # Upsert
+    row = {
+        "name": opp["name"],
+        "amount": opp["amount"],
+        "stage": opp["stage"],
+        "close_date": opp["close_date"],
+        "account": {
+            "id": opp.get("account_id", ""),
+            "name": opp.get("account_name", ""),
+            "revenue": opp.get("account_revenue"),
+            "industry": opp.get("account_industry"),
+        },
+        "contacts": opp.get("contacts", []),
+    }
+    if user_id:
+        row["user_id"] = user_id
+
+    existing = db.table("deals").select("id").eq("external_id", sf_opp_id).execute()
+    if existing.data:
+        db.table("deals").update(row).eq("external_id", sf_opp_id).execute()
+        action = "updated"
+        deal_id = existing.data[0]["id"]
+    else:
+        row["external_id"] = sf_opp_id
+        insert_resp = db.table("deals").insert(row).execute()
+        deal_id = insert_resp.data[0]["id"]
+        action = "created"
+
+    logger.info("Opportunity trigger: %s deal %s (sf_id=%s)", action, deal_id, sf_opp_id)
+    return {"status": "ok", "action": action, "deal_id": deal_id}
 
 
 def _enrich_salesforce_event(source: str, source_id: str, event_data: dict) -> dict | None:

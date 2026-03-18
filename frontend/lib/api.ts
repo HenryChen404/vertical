@@ -31,19 +31,6 @@ export const api = {
 
   // Files / Recordings
   getFiles: () => fetchApi<import("./types").RecordingFile[]>("/api/files"),
-  uploadRecording: async (eventId: string, blob: Blob, title?: string, durationSeconds?: number) => {
-    const form = new FormData();
-    form.append("file", blob, "recording.webm");
-    if (title) form.append("title", title);
-    if (durationSeconds !== undefined) form.append("duration_seconds", String(Math.round(durationSeconds)));
-    const res = await fetch(`${API_BASE}/api/events/${eventId}/recordings/upload`, {
-      method: "POST",
-      credentials: "include",
-      body: form,
-    });
-    if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
-    return res.json();
-  },
   linkRecording: (recordingId: string, eventId: string) =>
     fetchApi<{ success: boolean }>(`/api/recordings/${recordingId}/link`, {
       method: "POST",
@@ -87,10 +74,28 @@ export const api = {
   getEvent: (id: string) => fetchApi<import("./types").CalendarEvent>(`/api/sales/events/${id}`),
 
   // Deals
+  getDeals: () => fetchApi<import("./types").DealListItem[]>("/api/deals"),
   getDeal: (id: string) => fetchApi<import("./types").Deal>(`/api/deals/${id}`),
+  syncDeals: () => fetchApi<{ fetched: number; created: number; updated: number }>("/api/deals/sync", { method: "POST" }),
 
   // Schedule
   getMeeting: (id: string) => fetchApi<import("./types").MeetingDetail>(`/api/schedule/${id}`),
+  updateFeedback: (id: string, feedback: string) =>
+    fetchApi<{ success: boolean; feedback: string }>(`/api/schedule/${id}/feedback`, {
+      method: "PUT",
+      body: JSON.stringify({ feedback }),
+    }),
+  transcribeFeedback: async (meetingId: string, blob: Blob) => {
+    const form = new FormData();
+    form.append("file", blob, "recording.webm");
+    const res = await fetch(`${API_BASE}/api/schedule/${meetingId}/feedback/transcribe`, {
+      method: "POST",
+      credentials: "include",
+      body: form,
+    });
+    if (!res.ok) throw new Error(`Transcription failed: ${res.status}`);
+    return res.json() as Promise<{ success: boolean; feedback: string }>;
+  },
   startRecording: (id: string) => fetchApi<{ success: boolean }>(`/api/schedule/${id}/recording/start`, { method: "POST" }),
   stopRecording: (id: string) => fetchApi<{ success: boolean }>(`/api/schedule/${id}/recording/stop`, { method: "POST" }),
 

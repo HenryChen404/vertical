@@ -32,17 +32,40 @@ export interface Person {
   avatar_url?: string;
 }
 
+export interface DealContact {
+  id: string;
+  name: string;
+  email?: string;
+  title?: string;
+  company?: string;
+}
+
+export interface DealAccount {
+  id?: string;
+  name: string;
+  revenue?: number | null;
+  industry?: string | null;
+}
+
+export interface DealListItem {
+  id: string;
+  name: string;
+  amount: number | null;
+  stage: string;
+  close_date: string | null;
+  account: DealAccount;
+}
+
 export interface Deal {
   id: string;
   name: string;
-  org_name: string;
-  sector: string;
-  amount: string;
+  amount: number | null;
   stage: string;
-  close_date: string;
-  persons: Person[];
-  meetings: { id: string; title: string; date: string }[];
-  recordings: { id: string; title: string; date: string; duration: string }[];
+  close_date: string | null;
+  account: DealAccount;
+  contacts: DealContact[];
+  meetings: { id: string; title: string; start_time: string; end_time?: string; subtitle?: string }[];
+  recordings: { id: string; title: string; recorded_at?: string; duration_seconds: number }[];
 }
 
 export interface Attendee {
@@ -84,11 +107,10 @@ export interface MeetingDetail {
   time_end: string;
   location: string;
   account?: { name: string; sector: string; annual_revenue?: string; deal_id?: string } | null;
-  opportunity?: { name: string; amount: string; stage: string; close_date?: string } | null;
+  opportunity?: { id?: string; name: string; amount: string; stage: string; close_date?: string } | null;
   attendees: Attendee[];
   feedback: string;
   linked_files: { id: string; title: string; duration_seconds: number; recorded_at?: string; plaud_file_id?: string }[];
-  feedback_recordings?: { id: string; title: string; duration_seconds: number }[];
 }
 
 export interface FieldChange {

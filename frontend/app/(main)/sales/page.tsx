@@ -8,7 +8,7 @@ import { ChevronDown, X, CheckCircle2 } from "lucide-react";
 import { NavBar } from "@/components/layout/nav-bar";
 import { useFilterSort } from "@/components/layout/filter-sort-context";
 import { api } from "@/lib/api";
-import type { CalendarEvent } from "@/lib/types";
+import type { CalendarEvent, DealListItem } from "@/lib/types";
 
 const INTEGRATION_ICONS = [
   { name: "Google Calendar", icon: "https://www.figma.com/api/mcp/asset/42a3f103-0a8b-4fa1-9ac9-71a62899c3af" },
@@ -157,7 +157,70 @@ function StatusBanner({
   );
 }
 
+function formatAmount(amount: number | null): string {
+  if (amount === null || amount === undefined) return "";
+  if (amount >= 1_000_000) return `$${(amount / 1_000_000).toFixed(1)}M`;
+  if (amount >= 1_000) return `$${Math.round(amount / 1_000)}k`;
+  return `$${amount.toLocaleString()}`;
+}
+
+function DealRow({ deal, isLast }: { deal: DealListItem; isLast: boolean }) {
+  const parts = [deal.account?.name, deal.stage, formatAmount(deal.amount)].filter(Boolean);
+  return (
+    <Link
+      href={`/deals/${deal.id}`}
+      className={`flex flex-col gap-1 ${isLast ? "" : "pb-5 border-b border-[#EBEBEB]"}`}
+    >
+      <p className="text-[16px] text-[#3D3D3D] leading-6">{deal.name}</p>
+      {parts.length > 0 && (
+        <p className="text-[13px] text-[#7A7A7A] leading-4">{parts.join(" ｜ ")}</p>
+      )}
+    </Link>
+  );
+}
+
+function DealsList() {
+  const [deals, setDeals] = useState<DealListItem[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.getDeals().then((d) => {
+      setDeals(d);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="pt-8 text-center">
+        <p className="text-[14px] text-[#7A7A7A]">Loading deals...</p>
+      </div>
+    );
+  }
+
+  if (deals.length === 0) {
+    return (
+      <div className="flex flex-col flex-1 items-center justify-center gap-3 py-20">
+        <Image src="/icons/empty-calendar.svg" alt="" width={52} height={52} />
+        <p className="text-[20px] text-[#7A7A7A] leading-7">No deals yet</p>
+        <p className="text-[13px] text-[#7A7A7A] leading-4 text-center">
+          Deals from your CRM will be listed here
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-5 mt-5">
+      {deals.map((d, i) => (
+        <DealRow key={d.id} deal={d} isLast={i === deals.length - 1} />
+      ))}
+    </div>
+  );
+}
+
 export default function SalesPage() {
+  const [activeTab, setActiveTab] = useState<"schedule" | "deals">("schedule");
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const { openModal } = useFilterSort();
@@ -232,14 +295,32 @@ export default function SalesPage() {
       <NavBar />
       <div className="flex flex-col flex-1 px-6">
         {/* Title */}
-        <div className="pb-6 border-b border-[#EBEBEB] mt-8">
+        <div className="mt-8">
           <button onClick={openModal} className="flex items-center gap-2">
             <h1 className="text-[44px] font-light leading-[52px]">For Sales</h1>
             <ChevronDown className="w-[18px] h-[18px] mt-1 text-black" strokeWidth={1.5} />
           </button>
         </div>
 
-        {isEmpty ? (
+        {/* Tabs */}
+        <div className="flex gap-6 mt-4 border-b border-[#EBEBEB]">
+          <button
+            className={`pb-3 text-[14px] font-semibold ${activeTab === "schedule" ? "text-black border-b-2 border-black" : "text-[#A3A3A3]"}`}
+            onClick={() => setActiveTab("schedule")}
+          >
+            Schedule
+          </button>
+          <button
+            className={`pb-3 text-[14px] font-semibold ${activeTab === "deals" ? "text-black border-b-2 border-black" : "text-[#A3A3A3]"}`}
+            onClick={() => setActiveTab("deals")}
+          >
+            Deals
+          </button>
+        </div>
+
+        {activeTab === "deals" ? (
+          <DealsList />
+        ) : isEmpty ? (
           /* Empty state — vertically centered with feedback at bottom */
           <div className="flex flex-col flex-1 justify-between pb-6">
             <div />
@@ -253,9 +334,6 @@ export default function SalesPage() {
                   The scheduled meetings will be listed here
                 </p>
               </div>
-            </div>
-            <div className="py-3 text-center">
-              <p className="text-[13px] text-[#A3A3A3]">Send feedback</p>
             </div>
           </div>
         ) : (
@@ -289,12 +367,13 @@ export default function SalesPage() {
               ))}
             </div>
 
-            {/* Send feedback */}
-            <div className="py-3 text-center mt-4">
-              <p className="text-[13px] text-[#A3A3A3]">Send feedback</p>
-            </div>
           </>
         )}
+
+        {/* Send feedback */}
+        <div className="py-3 text-center mt-4">
+          <p className="text-[13px] text-[#A3A3A3]">Send feedback</p>
+        </div>
       </div>
     </div>
   );

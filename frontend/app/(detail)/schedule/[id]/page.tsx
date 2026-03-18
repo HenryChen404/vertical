@@ -1,27 +1,21 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
+import Link from "next/link";
 import Image from "next/image";
 import { BackHeader } from "@/components/layout/back-header";
 import { api } from "@/lib/api";
 import type { MeetingDetail, RecordingFile } from "@/lib/types";
-import { ChevronRight, X, Square } from "lucide-react";
+import { ChevronRight, Circle, CircleCheck } from "lucide-react";
+import { FeedbackSection } from "@/components/schedule/feedback-section";
 
 export default function ScheduleDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [meeting, setMeeting] = useState<MeetingDetail | null>(null);
   const [unlinking, setUnlinking] = useState<string | null>(null);
   const [showPicker, setShowPicker] = useState(false);
-
-  // Recording state
-  const [recording, setRecording] = useState(false);
-  const [elapsed, setElapsed] = useState(0);
-  const [uploading, setUploading] = useState(false);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const startTimeRef = useRef<number>(0);
+  const [confirmRemove, setConfirmRemove] = useState<MeetingDetail["linked_files"][number] | null>(null);
 
   const loadMeeting = useCallback(() => {
     api.getMeeting(id).then(setMeeting).catch(console.error);
@@ -30,90 +24,6 @@ export default function ScheduleDetailPage() {
   useEffect(() => {
     loadMeeting();
   }, [loadMeeting]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-        mediaRecorderRef.current.stop();
-      }
-    };
-  }, []);
-
-  const handleStartRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-          ? "audio/webm;codecs=opus"
-          : "audio/webm",
-      });
-
-      chunksRef.current = [];
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
-
-      mediaRecorder.onstop = () => {
-        stream.getTracks().forEach((t) => t.stop());
-      };
-
-      mediaRecorder.start(1000); // collect chunks every second
-      mediaRecorderRef.current = mediaRecorder;
-      startTimeRef.current = Date.now();
-      setRecording(true);
-      setElapsed(0);
-
-      timerRef.current = setInterval(() => {
-        setElapsed(Math.floor((Date.now() - startTimeRef.current) / 1000));
-      }, 1000);
-    } catch (e) {
-      console.error("Mic access denied:", e);
-    }
-  };
-
-  const handleStopRecording = async () => {
-    if (!mediaRecorderRef.current || !meeting) return;
-
-    const recorder = mediaRecorderRef.current;
-    const duration = Math.floor((Date.now() - startTimeRef.current) / 1000);
-
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-
-    // Wait for recorder to finish
-    await new Promise<void>((resolve) => {
-      const prevOnStop = recorder.onstop;
-      recorder.onstop = (e) => {
-        if (prevOnStop && typeof prevOnStop === "function") {
-          (prevOnStop as (ev: Event) => void)(e);
-        }
-        resolve();
-      };
-      recorder.stop();
-    });
-
-    setRecording(false);
-    setUploading(true);
-
-    const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-    try {
-      await api.uploadRecording(
-        meeting.id,
-        blob,
-        `Recording - ${meeting.title}`,
-        duration,
-      );
-      loadMeeting(); // refresh to show new file in Related Files
-    } catch (e) {
-      console.error("Upload failed:", e);
-    } finally {
-      setUploading(false);
-    }
-  };
 
   const handleUnlink = async (file: MeetingDetail["linked_files"][number]) => {
     if (!meeting) return;
@@ -190,10 +100,10 @@ export default function ScheduleDetailPage() {
                       {meeting.attendees.length !== 1 ? "s" : ""}
                     </p>
                   </div>
-                  <button className="flex items-center gap-1">
+                  <Link href={`/schedule/${id}/participants`} className="flex items-center gap-1">
                     <span className="text-[13px] text-[#A3A3A3]">Show all</span>
                     <ChevronRight className="w-4 h-4 text-[#A3A3A3]" strokeWidth={1.5} />
-                  </button>
+                  </Link>
                 </div>
               )}
             </div>
@@ -236,11 +146,19 @@ export default function ScheduleDetailPage() {
 
                 {meeting.opportunity?.name && (
                   <div className="flex flex-col gap-1">
-                    <div className="flex items-center gap-2">
-                      <Image src="/icons/opportunity.svg" alt="" width={24} height={24} className="shrink-0" />
-                      <p className="text-[16px] text-[#3D3D3D] leading-6">
-                        {meeting.opportunity.name}
-                      </p>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Image src="/icons/opportunity.svg" alt="" width={24} height={24} className="shrink-0" />
+                        <p className="text-[16px] text-[#3D3D3D] leading-6">
+                          {meeting.opportunity.name}
+                        </p>
+                      </div>
+                      {meeting.opportunity.id && (
+                        <Link href={`/deals/${meeting.opportunity.id}`} className="flex items-center gap-1">
+                          <span className="text-[13px] text-[#A3A3A3]">View</span>
+                          <ChevronRight className="w-4 h-4 text-[#A3A3A3]" strokeWidth={1.5} />
+                        </Link>
+                      )}
                     </div>
                     <div className="flex flex-col gap-2 pl-8">
                       {meeting.opportunity.amount && (
@@ -261,67 +179,20 @@ export default function ScheduleDetailPage() {
           )}
 
           {/* Feedback */}
-          <div className="flex flex-col gap-5">
-            <div className="px-6">
-              <div className="border-b border-[#EBEBEB] pb-3 flex items-center justify-between">
-                <h2 className="text-[20px] font-light leading-7 text-black">
-                  Feedback
-                </h2>
-                <div className="flex items-center gap-3">
-                  <Image src="/icons/pen.svg" alt="" width={24} height={24} />
-                  {!recording && (
-                    <button onClick={handleStartRecording} className="cursor-pointer">
-                      <Image src="/icons/mic.svg" alt="" width={24} height={24} />
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-            <div className="px-6">
-              {recording ? (
-                <div className="flex flex-col gap-4">
-                  <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-[#FF3B30] animate-pulse" />
-                    <span className="text-[14px] text-[#FF3B30] font-medium">
-                      Recording... {formatElapsed(elapsed)}
-                    </span>
-                  </div>
-                  <button
-                    onClick={handleStopRecording}
-                    className="w-full flex items-center justify-center gap-2 py-3 bg-[#FF3B30] rounded-[12px] cursor-pointer"
-                  >
-                    <Square className="w-4 h-4 text-white fill-white" strokeWidth={0} />
-                    <span className="text-[15px] font-semibold text-white">Stop Recording</span>
-                  </button>
-                </div>
-              ) : uploading ? (
-                <p className="text-[14px] text-[#7A7A7A]">Uploading recording...</p>
-              ) : (meeting.feedback_recordings?.length ?? 0) > 0 ? (
-                <div className="flex flex-col gap-4">
-                  {meeting.feedback_recordings!.map((r) => (
-                    <div key={r.id} className="flex items-center gap-3">
-                      <div className="w-2 h-2 rounded-full bg-[#3D3D3D] shrink-0" />
-                      <div className="flex-1">
-                        <p className="text-[14px] text-[#3D3D3D] leading-5">{r.title}</p>
-                        <p className="text-[13px] text-[#7A7A7A] leading-4">{formatHumanDuration(r.duration_seconds)}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-[16px] text-[#A3A3A3] leading-6">
-                  {meeting.feedback || "No feedback yet"}
-                </p>
-              )}
-            </div>
-          </div>
+          <FeedbackSection
+            meetingId={meeting.id}
+            feedback={meeting.feedback}
+            onFeedbackChange={(fb) =>
+              setMeeting((prev) => (prev ? { ...prev, feedback: fb } : prev))
+            }
+          />
 
-          {/* Related Files */}
+          {/* Related Recordings */}
           <div className="flex flex-col gap-5 pb-8">
             <div className="px-6">
               <div className="border-b border-[#EBEBEB] pb-3 flex items-center justify-between">
                 <h2 className="text-[20px] font-light leading-7 text-black">
-                  Related Files
+                  Related Recordings
                 </h2>
                 <button onClick={() => setShowPicker(true)} className="cursor-pointer">
                   <Image src="/icons/plus.svg" alt="" width={24} height={24} />
@@ -341,7 +212,7 @@ export default function ScheduleDetailPage() {
                       </p>
                     </div>
                     <button
-                      onClick={() => handleUnlink(f)}
+                      onClick={() => setConfirmRemove(f)}
                       disabled={unlinking === f.id}
                       className="cursor-pointer shrink-0 disabled:opacity-40"
                     >
@@ -367,6 +238,56 @@ export default function ScheduleDetailPage() {
           onLinked={handleFileLinked}
           onClose={() => setShowPicker(false)}
         />
+      )}
+
+      {/* Remove Confirmation Dialog */}
+      {confirmRemove && (
+        <>
+          <div
+            className="absolute inset-0 bg-black/40 z-40"
+            onClick={() => setConfirmRemove(null)}
+          />
+          <div className="absolute bottom-0 left-0 right-0 z-50 bg-white rounded-t-[5px] flex flex-col animate-slide-up">
+            <div className="flex items-center justify-between px-6 pt-5 pb-4">
+              <h3 className="text-[20px] font-light leading-7 text-black">
+                Remove recording
+              </h3>
+              <button
+                onClick={() => setConfirmRemove(null)}
+                className="cursor-pointer text-[#3D3D3D]"
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M12 4L4 12M4 4l8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+            <div className="px-6 pb-6">
+              <p className="text-[16px] text-[#3D3D3D] leading-6">
+                Remove recording from this meeting?{"\n"}
+                The recording will remain in your library. It won&apos;t be attached to this meeting anymore.
+              </p>
+            </div>
+            <div className="flex gap-3 px-6 pt-2 pb-6">
+              <button
+                onClick={() => setConfirmRemove(null)}
+                className="flex-1 py-3 border border-[#ADADAD] rounded-[5px] text-[16px] text-black leading-6 cursor-pointer bg-white"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  const file = confirmRemove;
+                  setConfirmRemove(null);
+                  await handleUnlink(file);
+                }}
+                disabled={unlinking === confirmRemove.id}
+                className="flex-1 py-3 bg-black rounded-[5px] text-[16px] font-semibold text-white leading-6 cursor-pointer disabled:opacity-50"
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
@@ -412,10 +333,14 @@ function formatRecordedMeta(recordedAt?: string, durationSeconds?: number): stri
   return parts.join(" ｜ ");
 }
 
-function formatElapsed(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+function formatShortDate(recordedAt?: string): string {
+  if (!recordedAt) return "";
+  const d = new Date(recordedAt);
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  return `${mm}-${dd} ${hh}:${min}`;
 }
 
 function FilePicker({
@@ -431,7 +356,8 @@ function FilePicker({
 }) {
   const [files, setFiles] = useState<RecordingFile[]>([]);
   const [loading, setLoading] = useState(true);
-  const [linking, setLinking] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     api.getFiles().then((f) => {
@@ -440,18 +366,31 @@ function FilePicker({
     }).catch(() => setLoading(false));
   }, []);
 
-  const handleLink = async (file: RecordingFile) => {
-    setLinking(file.id);
+  const availableFiles = files.filter((f) => !linkedRecordingIds.has(f.id));
+
+  const toggleFile = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleAdd = async () => {
+    if (selected.size === 0) return;
+    setSubmitting(true);
     try {
-      await api.linkRecording(file.id, eventId);
+      await Promise.all(
+        Array.from(selected).map((id) => api.linkRecording(id, eventId))
+      );
       onLinked();
     } catch (e) {
       console.error("Failed to link:", e);
-      setLinking(null);
+    } finally {
+      setSubmitting(false);
     }
   };
-
-  const availableFiles = files.filter((f) => !linkedRecordingIds.has(f.id));
 
   return (
     <>
@@ -459,44 +398,74 @@ function FilePicker({
         className="absolute inset-0 bg-black/40 z-40"
         onClick={onClose}
       />
-      <div className="absolute bottom-0 left-0 right-0 z-50 bg-white rounded-t-[16px] max-h-[60%] flex flex-col">
-        <div className="flex items-center justify-between px-6 pt-4 pb-3 border-b border-[#EBEBEB]">
-          <h3 className="text-[18px] leading-6 text-black">Add File</h3>
-          <button onClick={onClose} className="cursor-pointer">
-            <X className="w-5 h-5 text-[#7A7A7A]" strokeWidth={1.5} />
-          </button>
+      <div className="absolute bottom-0 left-0 right-0 z-50 bg-[#F9F9F9] rounded-t-[5px] flex flex-col max-h-[88%] animate-slide-up">
+        {/* Header */}
+        <div className="px-6 shrink-0">
+          <div className="border-b border-[#EBEBEB] py-4">
+            <h3 className="text-[28px] font-light leading-8 text-black">
+              Add Related Recordings
+            </h3>
+          </div>
         </div>
-        <div className="flex-1 overflow-y-auto px-6 py-4">
+
+        {/* List */}
+        <div className="flex-1 overflow-y-auto px-6 py-6">
           {loading ? (
-            <p className="text-[14px] text-[#A3A3A3]">Loading files...</p>
+            <p className="text-[16px] text-[#A3A3A3]">Loading...</p>
           ) : availableFiles.length === 0 ? (
-            <p className="text-[14px] text-[#A3A3A3]">No files available to link</p>
+            <p className="text-[16px] text-[#A3A3A3]">No recordings available</p>
           ) : (
-            <div className="flex flex-col gap-4">
-              {availableFiles.map((file) => (
-                <button
-                  key={file.id}
-                  onClick={() => handleLink(file)}
-                  disabled={linking === file.id}
-                  className="flex items-center justify-between py-2 cursor-pointer disabled:opacity-50"
-                >
-                  <div className="flex flex-col gap-0.5 text-left">
-                    <p className="text-[16px] text-[#3D3D3D] leading-6">
-                      {file.title}
-                    </p>
-                    <p className="text-[13px] text-[#7A7A7A] leading-4">
-                      {formatDuration(file.duration_seconds)}
-                    </p>
-                  </div>
-                  {linking === file.id ? (
-                    <span className="text-[14px] text-[#7A7A7A]">Linking...</span>
-                  ) : (
-                    <Image src="/icons/plus.svg" alt="" width={20} height={20} className="shrink-0" />
+            <div className="flex flex-col">
+              {availableFiles.map((file, i) => (
+                <div key={file.id}>
+                  <button
+                    onClick={() => toggleFile(file.id)}
+                    className="flex items-center w-full py-1 cursor-pointer"
+                  >
+                    <div className="flex-1 flex flex-col gap-1 text-left pr-4">
+                      <p className="text-[16px] text-[#3D3D3D] leading-6">
+                        {file.title}
+                      </p>
+                      <p className="text-[13px] text-[#A3A3A3] leading-4">
+                        {formatShortDate(file.recorded_at)}
+                      </p>
+                    </div>
+                    <div className="shrink-0">
+                      {selected.has(file.id) ? (
+                        <CircleCheck className="w-6 h-6 text-black fill-black stroke-white" strokeWidth={1.5} />
+                      ) : (
+                        <Circle className="w-6 h-6 text-[#C2C2C2]" strokeWidth={1.5} />
+                      )}
+                    </div>
+                  </button>
+                  {i < availableFiles.length - 1 && (
+                    <div className="border-b border-[#EBEBEB] my-4" />
                   )}
-                </button>
+                </div>
               ))}
             </div>
           )}
+        </div>
+
+        {/* Buttons */}
+        <div className="flex gap-3 px-6 pt-2 pb-6 shrink-0">
+          <button
+            onClick={onClose}
+            className="flex-1 py-3 border border-[#ADADAD] rounded-[5px] text-[16px] text-black leading-6 cursor-pointer bg-white"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleAdd}
+            disabled={selected.size === 0 || submitting}
+            className={`flex-1 py-3 rounded-[5px] text-[16px] font-semibold leading-6 cursor-pointer ${
+              selected.size > 0
+                ? "bg-black text-white"
+                : "bg-[#C2C2C2] text-[#A3A3A3]"
+            } disabled:opacity-70`}
+          >
+            {submitting ? "Adding..." : selected.size > 0 ? `Add (${selected.size})` : "Add"}
+          </button>
         </div>
       </div>
     </>
