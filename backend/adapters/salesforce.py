@@ -185,21 +185,55 @@ class SalesforceAdapter(BaseAdapter):
         if event_ids:
             ids_str = ",".join(f"'{eid}'" for eid in event_ids)
             soql = (
-                "SELECT EventId, RelationId, Status, Relation.Name, Relation.Email "
+                "SELECT EventId, RelationId, Status, "
+                "Relation.Name, Relation.Email, Relation.Type "
                 f"FROM EventRelation WHERE EventId IN ({ids_str})"
             )
             raw = self._execute_soql(client, connected_account, soql)
+            contact_ids = []
             if raw:
                 for rec in raw.get("records", []):
                     eid = rec.get("EventId", "")
                     relation = rec.get("Relation") or {}
+                    rel_type = (relation.get("Type") or "").lower()
+                    # Skip non-person relations (Opportunity, Account, etc.)
+                    if rel_type in ("opportunity", "account", "campaign", "case"):
+                        continue
+                    rel_id = rec.get("RelationId", "")
                     p = {
-                        "id": rec.get("RelationId", ""),
+                        "id": rel_id,
                         "name": relation.get("Name", ""),
                         "email": relation.get("Email", ""),
+                        "title": "",
+                        "company": "",
                         "status": rec.get("Status", ""),
                     }
                     participants_map.setdefault(eid, []).append(p)
+                    if rel_type == "contact" and rel_id:
+                        contact_ids.append(rel_id)
+
+            # Batch fetch Title and Account.Name for contacts
+            if contact_ids:
+                contact_detail_map: dict[str, dict] = {}
+                cids_str = ",".join(f"'{cid}'" for cid in set(contact_ids))
+                contact_soql = (
+                    f"SELECT Id, Title, Account.Name FROM Contact WHERE Id IN ({cids_str})"
+                )
+                contact_raw = self._execute_soql(client, connected_account, contact_soql)
+                if contact_raw:
+                    for crec in contact_raw.get("records", []):
+                        acct = crec.get("Account") or {}
+                        contact_detail_map[crec["Id"]] = {
+                            "title": crec.get("Title") or "",
+                            "company": acct.get("Name") or "",
+                        }
+                # Backfill title and company into participants
+                for parts in participants_map.values():
+                    for p in parts:
+                        if p["id"] in contact_detail_map:
+                            detail = contact_detail_map[p["id"]]
+                            p["title"] = detail["title"]
+                            p["company"] = detail["company"]
 
         # Assemble sales_details for each event
         for record in records:
@@ -253,6 +287,129 @@ class SalesforceAdapter(BaseAdapter):
 
         logger.info("Fetched %d events from Salesforce (simple query)", len(events))
         return events
+
+    def _fetch_opportunity_contacts(
+        self, client, connected_account, opp_ids: list[str]
+    ) -> dict[str, list[dict]]:
+        """Batch fetch contacts via OpportunityContactRole."""
+        if not opp_ids:
+            return {}
+        ids_str = ",".join(f"'{oid}'" for oid in opp_ids)
+
+        # Try with Account.Name first
+        soql = (
+            "SELECT OpportunityId, ContactId, Role, IsPrimary, "
+            "Contact.Name, Contact.Email, Contact.Title, Contact.Account.Name "
+            f"FROM OpportunityContactRole WHERE OpportunityId IN ({ids_str})"
+        )
+        raw = self._execute_soql(client, connected_account, soql)
+
+        # Fallback: without Account.Name if the query failed
+        if raw is None:
+            logger.warning("OpportunityContactRole query with Account.Name failed, trying without")
+            soql = (
+                "SELECT OpportunityId, ContactId, Role, IsPrimary, "
+                "Contact.Name, Contact.Email, Contact.Title "
+                f"FROM OpportunityContactRole WHERE OpportunityId IN ({ids_str})"
+            )
+            raw = self._execute_soql(client, connected_account, soql)
+
+        result: dict[str, list[dict]] = {}
+        if raw:
+            records = raw.get("records", [])
+            logger.info("OpportunityContactRole: found %d records for %d opportunities",
+                        len(records), len(opp_ids))
+            for rec in records:
+                contact = rec.get("Contact") or {}
+                acct = contact.get("Account") or {}
+                entry = {
+                    "id": rec.get("ContactId", ""),
+                    "name": contact.get("Name", ""),
+                    "email": contact.get("Email", ""),
+                    "title": contact.get("Title", ""),
+                    "company": acct.get("Name", ""),
+                }
+                result.setdefault(rec["OpportunityId"], []).append(entry)
+        else:
+            logger.warning("OpportunityContactRole: no data returned for opp_ids=%s", opp_ids)
+        return result
+
+    def fetch_opportunities(self, user_id: str = "demo_user") -> list[dict]:
+        """Fetch all open Opportunities with Account and Contact info."""
+        self._current_user_id = user_id
+        client, connected_account = self._get_client_and_account(user_id)
+        if not connected_account:
+            return []
+
+        soql = (
+            "SELECT Id, Name, Amount, StageName, CloseDate, IsClosed, AccountId, "
+            "Account.Name, Account.AnnualRevenue, Account.Industry "
+            "FROM Opportunity "
+            "WHERE IsClosed = false "
+            "ORDER BY CloseDate ASC "
+            "LIMIT 200"
+        )
+        raw = self._execute_soql(client, connected_account, soql)
+        if not raw:
+            return []
+
+        records = raw.get("records", [])
+        if not records:
+            return []
+
+        opp_ids = [r["Id"] for r in records]
+        contacts_map = self._fetch_opportunity_contacts(client, connected_account, opp_ids)
+
+        results = []
+        for rec in records:
+            acct = rec.get("Account") or {}
+            results.append({
+                "id": rec["Id"],
+                "name": rec.get("Name", ""),
+                "amount": rec.get("Amount"),
+                "stage": rec.get("StageName", ""),
+                "close_date": rec.get("CloseDate"),
+                "account_id": rec.get("AccountId"),
+                "account_name": acct.get("Name", ""),
+                "account_revenue": acct.get("AnnualRevenue"),
+                "account_industry": acct.get("Industry"),
+                "contacts": contacts_map.get(rec["Id"], []),
+            })
+        return results
+
+    def fetch_single_opportunity(self, opp_id: str, user_id: str = "demo_user") -> dict | None:
+        """Fetch a single Opportunity by ID with Account and Contacts."""
+        self._current_user_id = user_id
+        client, connected_account = self._get_client_and_account(user_id)
+        if not connected_account:
+            return None
+
+        soql = (
+            "SELECT Id, Name, Amount, StageName, CloseDate, IsClosed, AccountId, "
+            "Account.Name, Account.AnnualRevenue, Account.Industry "
+            f"FROM Opportunity WHERE Id = '{opp_id}'"
+        )
+        raw = self._execute_soql(client, connected_account, soql)
+        if not raw or not raw.get("records"):
+            return None
+
+        rec = raw["records"][0]
+        acct = rec.get("Account") or {}
+        contacts_map = self._fetch_opportunity_contacts(client, connected_account, [opp_id])
+
+        return {
+            "id": rec["Id"],
+            "name": rec.get("Name", ""),
+            "amount": rec.get("Amount"),
+            "stage": rec.get("StageName", ""),
+            "close_date": rec.get("CloseDate"),
+            "is_closed": rec.get("IsClosed", False),
+            "account_id": rec.get("AccountId"),
+            "account_name": acct.get("Name", ""),
+            "account_revenue": acct.get("AnnualRevenue"),
+            "account_industry": acct.get("Industry"),
+            "contacts": contacts_map.get(opp_id, []),
+        }
 
     def _normalize(self, record: dict) -> NormalizedEvent:
         start_time = datetime.fromisoformat(record["StartDateTime"])

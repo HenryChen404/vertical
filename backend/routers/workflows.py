@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -12,7 +13,7 @@ from pydantic import BaseModel
 
 from middleware.auth import get_current_user
 from services.crm_graph import get_graph, start_langgraph
-from services.transcription import transcribe_local, trigger_plaud_transcription
+from services.transcription import transcribe_plaud_recording
 from services.workflow import (
     TaskState,
     TaskType,
@@ -37,7 +38,7 @@ class RecordingRef(BaseModel):
 
 
 class CreateWorkflowRequest(BaseModel):
-    event_id: str
+    event_id: str | None = None
     recordings: list[RecordingRef]
 
 
@@ -66,10 +67,9 @@ async def create_workflow_endpoint(
 
     # Trigger transcription for each task
     for task in workflow["tasks"]:
-        if task["type"] == TaskType.LOCAL:
-            background_tasks.add_task(_run_local_transcription, task["id"], task["recording_id"])
-        elif task["type"] == TaskType.PLAUD:
-            background_tasks.add_task(_run_plaud_transcription, task["id"], task["recording_id"])
+        background_tasks.add_task(
+            _run_transcription, task["id"], task["recording_id"], user["id"]
+        )
 
     return workflow
 
@@ -232,34 +232,43 @@ async def confirm_endpoint(
 # --- Background task helpers ---
 
 
-async def _run_local_transcription(task_id: str, recording_id: str) -> None:
-    """Background: transcribe a local recording and update workflow."""
+async def _run_transcription(task_id: str, recording_id: str, user_id: str) -> None:
+    """Background: fetch PLAUD presigned URL → ElevenLabs STT → complete task.
+
+    Two modes based on ELEVENLABS_WEBHOOK_ID env var:
+    - Webhook mode (recommended): triggers async transcription, result arrives
+      via POST /api/webhooks/elevenlabs/transcription.
+    - Sync mode (fallback): blocks until ElevenLabs returns the transcript.
+    """
     from services.supabase import get_supabase
 
     db = get_supabase()
     db.table("workflow_tasks").update({"state": TaskState.TRANSCRIBING}).eq("id", task_id).execute()
 
-    try:
-        transcript = await transcribe_local(recording_id)
-        workflow = on_task_completed(task_id, transcript)
+    # Look up plaud_file_id from recordings table
+    rec_resp = db.table("recordings").select("plaud_file_id").eq("id", recording_id).execute()
+    if not rec_resp.data or not rec_resp.data[0].get("plaud_file_id"):
+        on_task_failed(task_id, f"Recording {recording_id} has no plaud_file_id")
+        return
 
-        # If all tasks done, start LangGraph
-        if workflow["state"] == WorkflowState.EXTRACTING:
-            await start_langgraph(workflow["id"])
-    except Exception as e:
-        logger.error("Local transcription failed for task %s: %s", task_id, e)
-        on_task_failed(task_id, str(e))
-
-
-async def _run_plaud_transcription(task_id: str, recording_id: str) -> None:
-    """Background: trigger PLAUD transcription API."""
-    from services.supabase import get_supabase
-
-    db = get_supabase()
-    db.table("workflow_tasks").update({"state": TaskState.TRANSCRIBING}).eq("id", task_id).execute()
+    plaud_file_id = rec_resp.data[0]["plaud_file_id"]
+    use_webhook = bool(os.getenv("ELEVENLABS_WEBHOOK_ID"))
 
     try:
-        await trigger_plaud_transcription(recording_id)
+        transcript = await transcribe_plaud_recording(
+            plaud_file_id,
+            user_id,
+            task_id=task_id,
+            use_webhook=use_webhook,
+        )
+
+        if transcript:
+            # Sync mode — we got the result directly
+            workflow = on_task_completed(task_id, transcript)
+            if workflow["state"] == WorkflowState.EXTRACTING:
+                await start_langgraph(workflow["id"])
+        # else: webhook mode — result will arrive via webhook endpoint
+
     except Exception as e:
-        logger.error("PLAUD transcription trigger failed for task %s: %s", task_id, e)
+        logger.error("Transcription failed for task %s: %s", task_id, e, exc_info=True)
         on_task_failed(task_id, str(e))

@@ -27,6 +27,7 @@ async def list_files(request: Request, user: dict = Depends(get_current_user)):
             db.table("recordings")
             .select("id, plaud_file_id, title, duration_seconds, recorded_at, source_type, event_id, crm_sync_status")
             .eq("user_id", user_id)
+            .eq("source_type", 1)
             .order("recorded_at", desc=True)
             .execute()
         )

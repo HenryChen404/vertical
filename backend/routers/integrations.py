@@ -27,15 +27,30 @@ PROVIDER_CONFIG = {
         "type": "crm",
         "toolkit_slug": "salesforce",
         "auth_config_env": "COMPOSIO_SALESFORCE_AUTH_CONFIG_ID",
-        "trigger_slug": "SALESFORCE_GENERIC_S_OBJECT_RECORD_UPDATED_TRIGGER",
-        "trigger_config": {
-            "sobject_name": "Event",
-            "fields_to_monitor": [
-                "Subject", "StartDateTime", "EndDateTime",
-                "Location", "Description", "WhoId", "WhatId",
-            ],
-            "interval": 2,
-        },
+        "triggers": [
+            {
+                "slug": "SALESFORCE_GENERIC_S_OBJECT_RECORD_UPDATED_TRIGGER",
+                "config": {
+                    "sobject_name": "Event",
+                    "fields_to_monitor": [
+                        "Subject", "StartDateTime", "EndDateTime",
+                        "Location", "Description", "WhoId", "WhatId",
+                    ],
+                    "interval": 2,
+                },
+            },
+            {
+                "slug": "SALESFORCE_GENERIC_S_OBJECT_RECORD_UPDATED_TRIGGER",
+                "config": {
+                    "sobject_name": "Opportunity",
+                    "fields_to_monitor": [
+                        "Name", "Amount", "StageName", "CloseDate",
+                        "AccountId",
+                    ],
+                    "interval": 2,
+                },
+            },
+        ],
     },
 }
 
@@ -70,36 +85,86 @@ def _check_connection(client, toolkit_slug: str, user_id: str):
     return None
 
 
-def _setup_trigger(client, provider: str, connected_account_id: str) -> str | None:
-    """Create a Composio trigger for the given provider. Returns trigger_id or None."""
-    config = PROVIDER_CONFIG.get(provider)
-    if not config or not config.get("trigger_slug"):
-        return None
-
+def _upsert_user_integration(user_id: str, provider: str, connected_account_id: str, connected: bool):
+    """Write or update the user_integrations mapping."""
     try:
-        resp = client.triggers.create(
-            slug=config["trigger_slug"],
-            connected_account_id=connected_account_id,
-            trigger_config=config.get("trigger_config", {}),
+        from services.supabase import get_supabase
+        db = get_supabase()
+        # Check if row exists
+        resp = (
+            db.table("user_integrations")
+            .select("id")
+            .eq("user_id", user_id)
+            .eq("provider", provider)
+            .execute()
         )
-        trigger_id = resp.trigger_id
-        logger.info("Created trigger %s for provider %s (account %s)",
-                     trigger_id, provider, connected_account_id)
-        return trigger_id
+        if resp.data:
+            db.table("user_integrations").update({
+                "composio_entity_id": connected_account_id,
+                "connected": connected,
+            }).eq("id", resp.data[0]["id"]).execute()
+        else:
+            db.table("user_integrations").insert({
+                "user_id": user_id,
+                "provider": provider,
+                "composio_entity_id": connected_account_id,
+                "connected": connected,
+            }).execute()
     except Exception as e:
-        logger.error("Failed to create trigger for %s: %s", provider, e)
-        return None
+        logger.warning("Failed to upsert user_integration for %s/%s: %s", user_id, provider, e)
+
+
+def _setup_trigger(client, provider: str, connected_account_id: str) -> list[str]:
+    """Create Composio triggers for the given provider. Returns list of trigger_ids."""
+    config = PROVIDER_CONFIG.get(provider)
+    if not config:
+        return []
+
+    # Support both old single-trigger format and new array format
+    triggers_config = config.get("triggers")
+    if not triggers_config:
+        slug = config.get("trigger_slug")
+        if not slug:
+            return []
+        triggers_config = [{"slug": slug, "config": config.get("trigger_config", {})}]
+
+    created = []
+    for tc in triggers_config:
+        try:
+            resp = client.triggers.create(
+                slug=tc["slug"],
+                connected_account_id=connected_account_id,
+                trigger_config=tc.get("config", {}),
+            )
+            trigger_id = resp.trigger_id
+            logger.info("Created trigger %s for provider %s (sobject=%s, account=%s)",
+                         trigger_id, provider, tc.get("config", {}).get("sobject_name", "?"), connected_account_id)
+            created.append(trigger_id)
+        except Exception as e:
+            # Trigger may already exist — not fatal
+            logger.warning("Failed to create trigger for %s (%s): %s",
+                           provider, tc.get("config", {}).get("sobject_name", "?"), e)
+    return created
 
 
 def _teardown_triggers(client, provider: str, user_id: str) -> int:
     """Delete all triggers for the given provider and user. Returns count deleted."""
     config = PROVIDER_CONFIG.get(provider)
-    if not config or not config.get("trigger_slug"):
+    if not config:
         return 0
+
+    # Collect all trigger slugs for this provider
+    triggers_config = config.get("triggers")
+    if triggers_config:
+        trigger_slugs = list({tc["slug"] for tc in triggers_config})
+    else:
+        slug = config.get("trigger_slug")
+        if not slug:
+            return 0
+        trigger_slugs = [slug]
 
     deleted = 0
     try:
-        # list_active doesn't filter by user_id directly, so filter by connected_account
         result = client.connected_accounts.list(
             user_ids=[user_id],
             toolkit_slugs=[config["toolkit_slug"]],
@@ -111,7 +176,7 @@ def _teardown_triggers(client, provider: str, user_id: str) -> int:
 
         active = client.triggers.list_active(
             connected_account_ids=account_ids,
-            trigger_names=[config["trigger_slug"]],
+            trigger_names=trigger_slugs,
         )
         triggers = active.items if hasattr(active, "items") else (active.triggers if hasattr(active, "triggers") else [])
         for trigger in triggers:
@@ -270,6 +335,8 @@ def disconnect(
         for account in result.items:
             client.connected_accounts.delete(nanoid=account.id)
             deleted += 1
+        # Remove from user_integrations
+        _upsert_user_integration(user_id, req.provider, "", False)
         return {"success": True, "deleted": deleted, "triggers_deleted": triggers_deleted}
     except Exception as e:
         logger.error("Composio disconnect failed: %s", e)
@@ -284,8 +351,8 @@ def crm_status(request: Request, user: dict = Depends(get_current_user)):
 
     account = _check_connection(client, "salesforce", user["id"])
     if account:
-        # Ensure trigger is set up for this connection
         _setup_trigger(client, "salesforce", account.id)
+        _upsert_user_integration(user["id"], "salesforce", account.id, True)
         return IntegrationStatus(connected=True, provider="salesforce")
     return IntegrationStatus(connected=False)
 
@@ -350,8 +417,8 @@ def calendar_status(request: Request, user: dict = Depends(get_current_user)):
     for slug, provider_name in [("googlecalendar", "google"), ("outlookcalendar", "outlook")]:
         account = _check_connection(client, slug, user["id"])
         if account:
-            # Ensure trigger is set up for this connection
             _setup_trigger(client, provider_name, account.id)
+            _upsert_user_integration(user["id"], provider_name, account.id, True)
             return IntegrationStatus(connected=True, provider=provider_name)
 
     return IntegrationStatus(connected=False)

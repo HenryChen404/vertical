@@ -193,3 +193,62 @@ async def sync_events(days_ahead: int = 7, user_id: str = "demo_user") -> dict:
         "created": created,
         "updated": updated,
     }
+
+
+async def sync_deals(user_id: str = "demo_user") -> dict:
+    """Full sync: fetch open Opportunities from Salesforce, upsert to deals table."""
+    sf_adapter = TOOLKIT_ADAPTER_MAP.get("salesforce")
+    if not sf_adapter or not isinstance(sf_adapter, SalesforceAdapter):
+        return {"fetched": 0, "created": 0, "updated": 0}
+
+    try:
+        opps = sf_adapter.fetch_opportunities(user_id=user_id)
+    except Exception as e:
+        logger.error("Failed to fetch opportunities: %s", e)
+        return {"fetched": 0, "created": 0, "updated": 0}
+
+    if not opps:
+        return {"fetched": 0, "created": 0, "updated": 0}
+
+    db = get_supabase()
+    created = 0
+    updated = 0
+
+    for opp in opps:
+        row = {
+            "name": opp["name"],
+            "amount": opp["amount"],
+            "stage": opp["stage"],
+            "close_date": opp["close_date"],
+            "account": {
+                "id": opp.get("account_id", ""),
+                "name": opp.get("account_name", ""),
+                "revenue": opp.get("account_revenue"),
+                "industry": opp.get("account_industry"),
+            },
+            "contacts": opp.get("contacts", []),
+        }
+        if user_id != "demo_user":
+            row["user_id"] = user_id
+
+        existing = db.table("deals").select("id").eq("external_id", opp["id"]).execute()
+        if existing.data:
+            db.table("deals").update(row).eq("external_id", opp["id"]).execute()
+            updated += 1
+        else:
+            row["external_id"] = opp["id"]
+            db.table("deals").insert(row).execute()
+            created += 1
+
+    # Remove deals that are no longer open
+    fetched_sf_ids = {opp["id"] for opp in opps}
+    query = db.table("deals").select("id, external_id")
+    if user_id != "demo_user":
+        query = query.eq("user_id", user_id)
+    all_deals = query.execute()
+    for deal in (all_deals.data or []):
+        if deal["external_id"] not in fetched_sf_ids:
+            db.table("deals").delete().eq("id", deal["id"]).execute()
+
+    logger.info("Sync deals: fetched=%d, created=%d, updated=%d", len(opps), created, updated)
+    return {"fetched": len(opps), "created": created, "updated": updated}
