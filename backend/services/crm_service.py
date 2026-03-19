@@ -1,4 +1,4 @@
-"""LangGraph CRM workflow — Phase B: extraction → review → push."""
+"""CRM workflow service — extraction, review chat, push to Salesforce."""
 
 from __future__ import annotations
 
@@ -6,13 +6,10 @@ import asyncio
 import json
 import logging
 import os
-from typing import Any, TypedDict
+from typing import Any
 
 from google import genai
 from google.genai import types as genai_types
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-from langgraph.graph import END, START, StateGraph
-from langgraph.types import Command, interrupt
 
 from services.extraction import (
     extract_account,
@@ -20,6 +17,7 @@ from services.extraction import (
     extract_event_summary,
     extract_opportunity,
 )
+from services.messages import MessageRole, add_message
 from services.supabase import get_supabase
 from services.workflow import WorkflowState, update_workflow_extractions, update_workflow_state
 
@@ -28,34 +26,31 @@ logger = logging.getLogger(__name__)
 GEMINI_MODEL = "gemini-3-flash-preview"
 
 
-# --- State ---
+# --- Extract ---
 
 
-class CrmWorkflowState(TypedDict):
-    workflow_id: str
-    transcripts: dict  # { recording_id: text }
-    extractions: dict  # { dimension: { status, data/error } }
-    original_values: dict  # Salesforce current values
-    messages: list  # Gemini conversation history
-    should_push: bool
+async def run_extraction(workflow_id: str) -> dict:
+    """Run all extraction skills in parallel. Called when all transcriptions complete."""
+    db = get_supabase()
 
+    # Collect transcripts
+    tasks_resp = db.table("workflow_tasks").select("recording_id, transcript").eq(
+        "workflow_id", workflow_id
+    ).eq("state", 2).execute()  # 2 = COMPLETED
+    transcripts = {t["recording_id"]: t["transcript"] for t in tasks_resp.data}
 
-# --- Nodes ---
+    combined_text = "\n\n---\n\n".join(transcripts.values())
 
-
-async def extract(state: CrmWorkflowState) -> dict:
-    """Run all extraction skills in parallel."""
-    combined_text = "\n\n---\n\n".join(state["transcripts"].values())
-
+    # TODO: enable all dimensions for production
     results = await asyncio.gather(
-        extract_opportunity(combined_text),
-        extract_contacts(combined_text),
-        extract_account(combined_text),
+        # extract_opportunity(combined_text),
+        # extract_contacts(combined_text),
+        # extract_account(combined_text),
         extract_event_summary(combined_text),
         return_exceptions=True,
     )
 
-    dimensions = ["opportunity", "contact", "account", "event_summary"]
+    dimensions = ["event_summary"]
     extractions: dict[str, dict] = {}
     for dim, result in zip(dimensions, results):
         if isinstance(result, Exception):
@@ -65,53 +60,99 @@ async def extract(state: CrmWorkflowState) -> dict:
             extractions[dim] = {"status": "completed", "data": result}
 
     # Persist to DB
-    update_workflow_extractions(state["workflow_id"], extractions)
-    update_workflow_state(state["workflow_id"], WorkflowState.REVIEW)
+    update_workflow_extractions(workflow_id, extractions)
+    update_workflow_state(workflow_id, WorkflowState.REVIEW)
 
-    return {"extractions": extractions}
+    # Fetch and store original Salesforce values for diff
+    _store_original_values(workflow_id)
 
+    # Get recording names for the message header
+    recording_ids = list(transcripts.keys())
+    rec_resp = db.table("recordings").select("id, title").in_("id", recording_ids).execute()
+    recording_names = [r["title"] for r in rec_resp.data] if rec_resp.data else []
 
-async def review(state: CrmWorkflowState) -> dict:
-    """Human-in-the-loop review node. Interrupts for user input."""
-    user_input = interrupt({
-        "extractions": state["extractions"],
-        "prompt": "Please review the extracted CRM data. You can ask to modify fields or confirm to push.",
+    # Create extraction result message (JSON content for frontend to render)
+    add_message(workflow_id, MessageRole.ASSISTANT, {
+        "text": "Analysis complete. Here are the extracted CRM updates:",
+        "extractions": extractions,
+        "recordings": recording_names,
     })
 
-    # Process user input with Gemini + tools
-    messages = list(state.get("messages") or [])
-    messages.append({"role": "user", "content": user_input})
+    return extractions
 
-    response = await _call_gemini_with_tools(messages, state)
 
-    return {
+# --- Review chat ---
+
+
+async def chat_review(workflow_id: str, user_message: str) -> dict:
+    """Process a user chat message during review, using Gemini with tools."""
+    db = get_supabase()
+    wf_resp = db.table("workflows").select("extractions, messages, event_id").eq("id", workflow_id).execute()
+    workflow = wf_resp.data[0]
+
+    extractions = workflow.get("extractions") or {}
+    llm_messages = workflow.get("messages") or []
+    llm_messages.append({"role": "user", "content": user_message})
+
+    # Persist user message
+    add_message(workflow_id, MessageRole.USER, {"text": user_message})
+
+    # Get transcripts for potential re-extraction
+    tasks_resp = db.table("workflow_tasks").select("recording_id, transcript").eq(
+        "workflow_id", workflow_id
+    ).eq("state", 2).execute()
+    transcripts = {t["recording_id"]: t["transcript"] for t in tasks_resp.data}
+
+    response = await _call_gemini_with_tools(llm_messages, extractions, transcripts)
+
+    # Persist LLM context to workflow
+    update_data = {
         "extractions": response["extractions"],
         "messages": response["messages"],
-        "should_push": response["should_push"],
     }
+    db.table("workflows").update(update_data).eq("id", workflow_id).execute()
+
+    # Persist assistant response
+    assistant_text = response["messages"][-1]["content"] if response["messages"] else "Done."
+    msg_content: dict[str, Any] = {"text": assistant_text}
+    if response.get("should_push"):
+        msg_content["text"] = "Confirmed. Pushing changes to CRM..."
+    if response["extractions"] != extractions:
+        # Extractions were modified — include updated snapshot
+        msg_content["extractions"] = response["extractions"]
+    add_message(workflow_id, MessageRole.ASSISTANT, msg_content)
+
+    return response
 
 
-async def push_to_crm(state: CrmWorkflowState) -> dict:
+# --- Push to CRM ---
+
+
+async def push_to_crm(workflow_id: str) -> None:
     """Push confirmed extractions to Salesforce via Composio."""
     from adapters.salesforce import SalesforceAdapter
 
-    update_workflow_state(state["workflow_id"], WorkflowState.PUSHING)
+    update_workflow_state(workflow_id, WorkflowState.PUSHING)
 
     adapter = SalesforceAdapter()
     client, account = adapter._get_client_and_account()
 
     if not client or not account:
         logger.error("No Salesforce connection for push")
-        update_workflow_state(state["workflow_id"], WorkflowState.FAILED)
-        return {"should_push": False}
+        update_workflow_state(workflow_id, WorkflowState.FAILED)
+        add_message(workflow_id, MessageRole.ASSISTANT, {
+            "text": "Failed to connect to Salesforce.",
+        })
+        return
 
-    extractions = state["extractions"]
-
-    # Get the event to find related Salesforce IDs
     db = get_supabase()
-    wf_resp = db.table("workflows").select("event_id").eq("id", state["workflow_id"]).execute()
-    event_id = wf_resp.data[0].get("event_id")
+    wf_resp = db.table("workflows").select("extractions, event_id").eq("id", workflow_id).execute()
+    workflow = wf_resp.data[0]
+    extractions = workflow.get("extractions") or {}
+
+    # Get Salesforce IDs from event
     sales_details = {}
+    event_id = workflow.get("event_id")
     if event_id:
         event_resp = db.table("events").select("sales_details").eq("id", event_id).execute()
         if event_resp.data:
@@ -152,113 +193,45 @@ async def push_to_crm(state: CrmWorkflowState) -> dict:
                 )
                 logger.info("Updated Account %s", acct_id)
 
-        update_workflow_state(state["workflow_id"], WorkflowState.DONE)
-        logger.info("CRM push completed for workflow %s", state["workflow_id"])
+        update_workflow_state(workflow_id, WorkflowState.DONE)
+        add_message(workflow_id, MessageRole.ASSISTANT, {
+            "text": "CRM update complete! Changes have been pushed to Salesforce.",
+        })
+        logger.info("CRM push completed for workflow %s", workflow_id)
     except Exception as e:
         logger.error("CRM push failed: %s", e)
-        update_workflow_state(state["workflow_id"], WorkflowState.FAILED)
-
-    return {"should_push": False}
-
-
-# --- Routing ---
+        update_workflow_state(workflow_id, WorkflowState.FAILED)
+        add_message(workflow_id, MessageRole.ASSISTANT, {
+            "text": f"CRM push failed: {e}",
+        })
 
 
-def route_after_review(state: CrmWorkflowState) -> str:
-    return "push_to_crm" if state.get("should_push") else "review"
+# --- Helpers ---
 
 
-# --- Graph ---
-
-builder = StateGraph(CrmWorkflowState)
-builder.add_node("extract", extract)
-builder.add_node("review", review)
-builder.add_node("push_to_crm", push_to_crm)
-builder.add_edge(START, "extract")
-builder.add_edge("extract", "review")
-builder.add_conditional_edges("review", route_after_review)
-builder.add_edge("push_to_crm", END)
-
-
-_pool = None
-
-
-async def get_graph():
-    """Compile the graph with a shared Postgres connection pool (singleton)."""
-    global _pool
-
-    if _pool is None:
-        db_uri = os.getenv("SUPABASE_DB_URI")
-        if not db_uri:
-            raise RuntimeError("SUPABASE_DB_URI not set")
-
-        from psycopg_pool import AsyncConnectionPool
-
-        _pool = AsyncConnectionPool(conninfo=db_uri, open=False)
-        await _pool.open()
-
-    return builder.compile(checkpointer=AsyncPostgresSaver(_pool))
-
-
-# --- Phase A → Phase B bridge ---
-
-
-async def start_langgraph(workflow_id: str) -> None:
-    """Called when all transcription tasks complete. Starts the LangGraph workflow."""
-    db = get_supabase()
-
-    # Collect all transcripts
-    tasks_resp = db.table("workflow_tasks").select("recording_id, transcript").eq(
-        "workflow_id", workflow_id
-    ).eq("state", 2).execute()  # 2 = COMPLETED
-    transcripts = {t["recording_id"]: t["transcript"] for t in tasks_resp.data}
-
-    # Fetch Salesforce current values (original_values for diff)
-    original_values = await _fetch_original_values(workflow_id)
-
-    # Start LangGraph
-    graph = await get_graph()
-    await graph.ainvoke(
-        {
-            "workflow_id": workflow_id,
-            "transcripts": transcripts,
-            "extractions": {},
-            "original_values": original_values,
-            "messages": [],
-            "should_push": False,
-        },
-        config={"configurable": {"thread_id": workflow_id}},
-    )
-
-
-async def _fetch_original_values(workflow_id: str) -> dict:
-    """Fetch current Salesforce values for comparison."""
+def _store_original_values(workflow_id: str) -> None:
+    """Fetch current Salesforce values and store on workflow for diff."""
     db = get_supabase()
     wf_resp = db.table("workflows").select("event_id").eq("id", workflow_id).execute()
     if not wf_resp.data:
-        return {}
+        return
 
     event_id = wf_resp.data[0].get("event_id")
     if not event_id:
-        return {}
+        return
 
     event_resp = db.table("events").select("sales_details").eq("id", event_id).execute()
     if not event_resp.data:
-        return {}
+        return
 
     sales_details = (event_resp.data[0] or {}).get("sales_details") or {}
-
-    # Store original values from sales_details
     original = {}
     if "opportunity" in sales_details:
         original["opportunity"] = sales_details["opportunity"]
     if "account" in sales_details:
         original["account"] = sales_details["account"]
 
-    # Persist to workflow
     db.table("workflows").update({"original_values": original}).eq("id", workflow_id).execute()
-
-    return original
 
 
 # --- Gemini review chat ---
@@ -303,22 +276,29 @@ REVIEW_TOOLS = [
 
 async def _call_gemini_with_tools(
     messages: list[dict],
-    state: CrmWorkflowState,
+    extractions: dict,
+    transcripts: dict,
 ) -> dict[str, Any]:
     """Call Gemini with review tools, process tool calls, return updated state."""
     client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-    extractions = dict(state["extractions"])
+    extractions = dict(extractions)
     should_push = False
 
     system_instruction = (
         "You are a sales AI assistant helping review CRM data extracted from meeting transcripts. "
         "The user can ask you to update fields, re-extract dimensions, or confirm and push to CRM. "
         "Use the provided tools to make changes. Be concise and helpful.\n\n"
+        "IMPORTANT formatting rules:\n"
+        "- Always use standard Markdown syntax.\n"
+        "- Use **bold** for emphasis.\n"
+        "- For lists, always use numbered (`1.` `2.` `3.`) or bullet (`-`) syntax, "
+        "with each item on its own line and a blank line before and after the list.\n"
+        "- Separate paragraphs with a blank line.\n"
+        "- Never concatenate list items into a single line.\n\n"
         f"Current extractions:\n{json.dumps(extractions, indent=2, default=str)}"
     )
 
-    # Convert tools to Gemini function declarations
     tool_declarations = []
     for tool in REVIEW_TOOLS:
         tool_declarations.append(genai_types.FunctionDeclaration(
@@ -327,7 +307,6 @@ async def _call_gemini_with_tools(
             parameters=tool["parameters"],
         ))
 
-    # Build Gemini messages
     gemini_contents = []
     for msg in messages:
         role = "user" if msg["role"] == "user" else "model"
@@ -336,7 +315,6 @@ async def _call_gemini_with_tools(
             parts=[genai_types.Part(text=msg["content"])],
         ))
 
-    # Run sync Gemini call in a thread to avoid blocking the event loop
     response = await asyncio.to_thread(
         client.models.generate_content,
         model=GEMINI_MODEL,
@@ -348,26 +326,20 @@ async def _call_gemini_with_tools(
         ),
     )
 
-    # Process response
     assistant_text_parts = []
     for part in response.candidates[0].content.parts:
         if part.text:
             assistant_text_parts.append(part.text)
         elif part.function_call:
             fc = part.function_call
-            tool_result = await _execute_review_tool(fc.name, dict(fc.args), extractions, state)
+            tool_result = await _execute_review_tool(fc.name, dict(fc.args), extractions, transcripts)
             if fc.name == "confirm_and_push":
                 should_push = True
-            elif fc.name == "update_field":
-                extractions = tool_result.get("extractions", extractions)
-            elif fc.name == "re_extract":
+            elif fc.name in ("update_field", "re_extract"):
                 extractions = tool_result.get("extractions", extractions)
 
     assistant_text = " ".join(assistant_text_parts) if assistant_text_parts else "Done."
     messages.append({"role": "assistant", "content": assistant_text})
-
-    # Persist updated extractions
-    update_workflow_extractions(state["workflow_id"], extractions)
 
     return {
         "extractions": extractions,
@@ -377,9 +349,9 @@ async def _call_gemini_with_tools(
 
 
 async def _execute_review_tool(
-    name: str, args: dict, extractions: dict, state: CrmWorkflowState
+    name: str, args: dict, extractions: dict, transcripts: dict
 ) -> dict:
-    """Execute a review tool and return updated state."""
+    """Execute a review tool and return updated extractions."""
     if name == "update_field":
         dim = args["dimension"]
         field = args["field"]
@@ -390,7 +362,7 @@ async def _execute_review_tool(
 
     elif name == "re_extract":
         dim = args["dimension"]
-        combined_text = "\n\n---\n\n".join(state["transcripts"].values())
+        combined_text = "\n\n---\n\n".join(transcripts.values())
         extract_fn = {
             "opportunity": extract_opportunity,
             "contact": extract_contacts,

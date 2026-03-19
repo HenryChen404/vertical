@@ -12,7 +12,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from middleware.auth import get_current_user
-from services.crm_graph import get_graph, start_langgraph
+from services.crm_service import chat_review, push_to_crm, run_extraction
+from services.messages import MessageRole, add_message, get_messages
 from services.transcription import transcribe_plaud_recording
 from services.workflow import (
     TaskState,
@@ -65,6 +66,11 @@ async def create_workflow_endpoint(
     user_id = user["id"] if user["id"] != "demo_user" else None
     workflow = create_workflow(req.event_id, recordings, user_id=user_id)
 
+    # Initial assistant message
+    add_message(workflow["id"], MessageRole.ASSISTANT, {
+        "text": "Starting transcription...",
+    })
+
     # Trigger transcription for each task
     for task in workflow["tasks"]:
         background_tasks.add_task(
@@ -85,6 +91,19 @@ async def get_workflow_endpoint(
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
     return workflow
+
+
+@router.get("/workflows/{workflow_id}/messages")
+async def get_messages_endpoint(
+    workflow_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Get all messages for a workflow."""
+    workflow = get_workflow(workflow_id)
+    if not workflow:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    return get_messages(workflow_id)
 
 
 @router.get("/workflows/{workflow_id}/stream")
@@ -162,20 +181,14 @@ async def chat_endpoint(
     request: Request,
     user: dict = Depends(get_current_user),
 ):
-    """Resume LangGraph with user message (review chat)."""
+    """Chat with Gemini to review/modify extractions."""
     workflow = get_workflow(workflow_id)
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
     if workflow["state"] != WorkflowState.REVIEW:
         raise HTTPException(status_code=400, detail="Workflow not in review state")
 
-    from langgraph.types import Command
-
-    graph = await get_graph()
-    result = await graph.ainvoke(
-        Command(resume=req.message),
-        config={"configurable": {"thread_id": workflow_id}},
-    )
+    result = await chat_review(workflow_id, req.message)
 
     return {
         "extractions": result.get("extractions", {}),
@@ -216,16 +229,7 @@ async def confirm_endpoint(
     if workflow["state"] != WorkflowState.REVIEW:
         raise HTTPException(status_code=400, detail="Workflow not in review state")
 
-    # Resume LangGraph with confirm_and_push
-    from langgraph.types import Command
-
-    graph = await get_graph()
-    background_tasks.add_task(
-        graph.ainvoke,
-        Command(resume="confirm_and_push"),
-        {"configurable": {"thread_id": workflow_id}},
-    )
-
+    background_tasks.add_task(push_to_crm, workflow_id)
     return {"status": "pushing"}
 
 
@@ -266,7 +270,10 @@ async def _run_transcription(task_id: str, recording_id: str, user_id: str) -> N
             # Sync mode — we got the result directly
             workflow = on_task_completed(task_id, transcript)
             if workflow["state"] == WorkflowState.EXTRACTING:
-                await start_langgraph(workflow["id"])
+                add_message(workflow["id"], MessageRole.ASSISTANT, {
+                    "text": "Transcription complete. Starting analysis...",
+                })
+                await run_extraction(workflow["id"])
         # else: webhook mode — result will arrive via webhook endpoint
 
     except Exception as e:
