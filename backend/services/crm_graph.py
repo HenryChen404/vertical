@@ -181,12 +181,11 @@ builder.add_edge("push_to_crm", END)
 
 
 _pool = None
-_checkpointer_ready = False
 
 
 async def get_graph():
     """Compile the graph with a shared Postgres connection pool (singleton)."""
-    global _pool, _checkpointer_ready
+    global _pool
 
     if _pool is None:
         db_uri = os.getenv("SUPABASE_DB_URI")
@@ -197,17 +196,6 @@ async def get_graph():
 
         _pool = AsyncConnectionPool(conninfo=db_uri, open=False)
         await _pool.open()
-
-    if not _checkpointer_ready:
-        checkpointer = AsyncPostgresSaver(_pool)
-        try:
-            await checkpointer.setup()
-        except Exception as e:
-            # Transaction-mode poolers (e.g. Supavisor) can't run
-            # CREATE INDEX CONCURRENTLY inside a transaction block.
-            # Tables already exist from migrations, so this is safe to skip.
-            logger.warning("Checkpointer setup skipped (tables likely exist): %s", e)
-        _checkpointer_ready = True
 
     return builder.compile(checkpointer=AsyncPostgresSaver(_pool))
 
