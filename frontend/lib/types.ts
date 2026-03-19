@@ -209,3 +209,16 @@ export interface WorkflowStreamEvent {
   extractions?: Record<string, { status: string; data?: Record<string, unknown>; error?: string }>;
 }
 
+// Message role: 0=user, 1=assistant
+export interface WorkflowMessage {
+  id: string;
+  workflow_id: string;
+  role: 0 | 1;
+  content: {
+    text?: string;
+    extractions?: Record<string, { status: string; data?: Record<string, unknown>; error?: string }>;
+    recordings?: string[];
+  };
+  created_at: string;
+}
+

@@ -112,6 +112,7 @@ export const api = {
       }),
     }),
   getWorkflow: (id: string) => fetchApi<import("./types").Workflow>(`/api/workflows/${id}`),
+  getWorkflowMessages: (id: string) => fetchApi<import("./types").WorkflowMessage[]>(`/api/workflows/${id}/messages`),
   streamWorkflow: (id: string) => {
     const url = `${API_BASE}/api/workflows/${id}/stream`;
     return new EventSource(url, { withCredentials: true });
