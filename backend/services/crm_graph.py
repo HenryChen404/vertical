@@ -180,19 +180,30 @@ builder.add_conditional_edges("review", route_after_review)
 builder.add_edge("push_to_crm", END)
 
 
+_pool = None
+_checkpointer_ready = False
+
+
 async def get_graph():
-    """Compile the graph with a fresh Postgres checkpointer per invocation."""
-    db_uri = os.getenv("SUPABASE_DB_URI")
-    if not db_uri:
-        raise RuntimeError("SUPABASE_DB_URI not set")
+    """Compile the graph with a shared Postgres connection pool (singleton)."""
+    global _pool, _checkpointer_ready
 
-    from psycopg_pool import AsyncConnectionPool
+    if _pool is None:
+        db_uri = os.getenv("SUPABASE_DB_URI")
+        if not db_uri:
+            raise RuntimeError("SUPABASE_DB_URI not set")
 
-    pool = AsyncConnectionPool(conninfo=db_uri, open=False)
-    await pool.open()
-    checkpointer = AsyncPostgresSaver(pool)
-    await checkpointer.setup()
-    return builder.compile(checkpointer=checkpointer)
+        from psycopg_pool import AsyncConnectionPool
+
+        _pool = AsyncConnectionPool(conninfo=db_uri, open=False)
+        await _pool.open()
+
+    if not _checkpointer_ready:
+        checkpointer = AsyncPostgresSaver(_pool)
+        await checkpointer.setup()
+        _checkpointer_ready = True
+
+    return builder.compile(checkpointer=AsyncPostgresSaver(_pool))
 
 
 # --- Phase A → Phase B bridge ---
