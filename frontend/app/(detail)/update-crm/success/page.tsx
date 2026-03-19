@@ -14,18 +14,26 @@ export default function UpdateCrmSuccessPage() {
 
     api.getWorkflow(workflowId).then((wf) => {
       const results: string[] = [];
-      const extractions = wf.extractions || {};
+      const proposed = wf.extractions?.proposed_changes || [];
 
-      if (extractions.opportunity?.status === "completed") results.push("Opportunity updated");
-      if (extractions.account?.status === "completed") results.push("Account synced");
-      if (extractions.contact?.status === "completed") results.push("Contacts updated");
-      if (extractions.event_summary?.status === "completed") results.push("Event summary saved");
+      // Group approved changes by object_type + action
+      const seen = new Set<string>();
+      for (const change of proposed) {
+        if (!change.approved) continue;
+        const key = `${change.action}:${change.object_type}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        if (change.action === "create") {
+          results.push(`${change.object_type} created`);
+        } else {
+          results.push(`${change.object_type} updated`);
+        }
+      }
 
       setItems(results.length > 0 ? results : ["CRM updated successfully"]);
 
-      // Mark recordings as synced
       sessionStorage.removeItem("crm_workflow_id");
-      sessionStorage.removeItem("crm_sections");
     }).catch(console.error);
   }, []);
 
@@ -56,14 +64,14 @@ export default function UpdateCrmSuccessPage() {
       </div>
 
       {/* Input area */}
-      <div className="flex items-center gap-3 px-4 pt-3 pb-8 bg-white shrink-0">
-        <div className="flex-1 h-11 bg-[var(--bg-page)] rounded-full px-4 flex items-center">
+      <div className="flex items-center gap-3 px-4 pt-4 pb-8 bg-white shrink-0 border-t border-[#EBEBEB]">
+        <div className="flex-1 flex items-center h-11 bg-[#F0F0F0] rounded-full px-4">
           <span className="text-[14px] text-[var(--text-gray)]">Type a message...</span>
+          <button className="shrink-0 ml-auto">
+            <Mic className="w-5 h-5 text-[var(--text-gray)]" />
+          </button>
         </div>
-        <button className="w-11 h-11 rounded-full bg-[var(--bg-page)] flex items-center justify-center shrink-0">
-          <Mic className="w-5 h-5 text-[var(--text-black)]" />
-        </button>
-        <button className="w-11 h-11 rounded-full bg-[var(--accent-blue)] flex items-center justify-center shrink-0">
+        <button className="w-11 h-11 rounded-full bg-black flex items-center justify-center shrink-0 opacity-50">
           <Send className="w-5 h-5 text-white" />
         </button>
       </div>

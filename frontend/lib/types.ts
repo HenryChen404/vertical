@@ -180,7 +180,26 @@ export interface UnsyncedRecording {
   crm_tags?: CrmRecordingTag[];
 }
 
-// Workflow states: 0=CREATED, 1=TRANSCRIBING, 2=EXTRACTING, 3=REVIEW, 4=PUSHING, 5=DONE, 6=FAILED
+// --- Proposed Changes (agent-based CRM change proposals) ---
+
+export interface FieldDiff {
+  field: string; // Salesforce API field name
+  label: string; // Human-readable label
+  old?: string | null;
+  new: string;
+}
+
+export interface ProposedChange {
+  id: string;
+  object_type: string; // "Opportunity", "Account", "Event", "Task", "Contact"
+  object_name?: string;
+  record_id?: string;
+  action: "update" | "create";
+  changes: FieldDiff[];
+  approved: boolean;
+}
+
+// Workflow states: 0=CREATED, 1=TRANSCRIBING, 2=ANALYZING, 3=REVIEW, 4=PUSHING, 5=DONE, 6=FAILED
 export interface WorkflowTask {
   id: string;
   workflow_id: string;
@@ -195,8 +214,10 @@ export interface Workflow {
   id: string;
   event_id: string | null;
   state: number;
-  extractions?: Record<string, { status: string; data?: Record<string, unknown>; error?: string }>;
-  original_values?: Record<string, Record<string, unknown>>;
+  extractions?: {
+    proposed_changes?: ProposedChange[];
+    summary?: string;
+  };
   tasks?: WorkflowTask[];
 }
 
@@ -206,7 +227,10 @@ export interface WorkflowStreamEvent {
   tasks_completed: number;
   tasks_failed: number;
   message?: string;
-  extractions?: Record<string, { status: string; data?: Record<string, unknown>; error?: string }>;
+  extractions?: {
+    proposed_changes?: ProposedChange[];
+    summary?: string;
+  };
 }
 
 // Message role: 0=user, 1=assistant
@@ -216,7 +240,7 @@ export interface WorkflowMessage {
   role: 0 | 1;
   content: {
     text?: string;
-    extractions?: Record<string, { status: string; data?: Record<string, unknown>; error?: string }>;
+    proposed_changes?: ProposedChange[];
     recordings?: string[];
   };
   created_at: string;

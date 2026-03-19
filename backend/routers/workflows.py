@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from middleware.auth import get_current_user
-from services.crm_service import chat_review, push_to_crm, run_extraction
+from services.crm_service import chat_review, push_to_crm, run_analysis
 from services.messages import MessageRole, add_message, get_messages
 from services.transcription import transcribe_plaud_recording
 from services.workflow import (
@@ -54,6 +54,22 @@ class UpdateExtractionsRequest(BaseModel):
 # --- Endpoints ---
 
 
+@router.post("/workflows/transcribe-voice")
+async def transcribe_voice_endpoint(
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Transcribe a voice recording (from mic) via ElevenLabs STT."""
+    from services.transcription import transcribe_audio_bytes
+
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="No audio data")
+
+    transcript = await transcribe_audio_bytes(body)
+    return {"text": transcript}
+
+
 @router.post("/workflows")
 async def create_workflow_endpoint(
     req: CreateWorkflowRequest,
@@ -65,11 +81,6 @@ async def create_workflow_endpoint(
     recordings = [{"type": r.type, "id": r.id} for r in req.recordings]
     user_id = user["id"] if user["id"] != "demo_user" else None
     workflow = create_workflow(req.event_id, recordings, user_id=user_id)
-
-    # Initial assistant message
-    add_message(workflow["id"], MessageRole.ASSISTANT, {
-        "text": "Starting transcription...",
-    })
 
     # Trigger transcription for each task
     for task in workflow["tasks"]:
@@ -145,7 +156,7 @@ async def stream_workflow_endpoint(
                 if current_state == WorkflowState.TRANSCRIBING:
                     event["message"] = f"Transcribing: {completed}/{total} completed"
                 elif current_state == WorkflowState.EXTRACTING:
-                    event["message"] = "Extracting CRM data from transcripts..."
+                    event["message"] = "Analyzing meeting data..."
                     event["extractions"] = workflow.get("extractions", {})
                 elif current_state == WorkflowState.REVIEW:
                     event["message"] = "Ready for review"
@@ -226,8 +237,8 @@ async def confirm_endpoint(
     workflow = get_workflow(workflow_id)
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
-    if workflow["state"] != WorkflowState.REVIEW:
-        raise HTTPException(status_code=400, detail="Workflow not in review state")
+    if workflow["state"] not in (WorkflowState.REVIEW, WorkflowState.FAILED):
+        raise HTTPException(status_code=400, detail="Workflow not in review or failed state")
 
     background_tasks.add_task(push_to_crm, workflow_id)
     return {"status": "pushing"}
@@ -236,26 +247,94 @@ async def confirm_endpoint(
 # --- Background task helpers ---
 
 
-async def _run_transcription(task_id: str, recording_id: str, user_id: str) -> None:
-    """Background: fetch PLAUD presigned URL → ElevenLabs STT → complete task.
+def _extract_plaud_transcript(plaud_file: dict) -> str | None:
+    """Extract transcript text from PLAUD API file detail response.
 
-    Two modes based on ELEVENLABS_WEBHOOK_ID env var:
-    - Webhook mode (recommended): triggers async transcription, result arrives
-      via POST /api/webhooks/elevenlabs/transcription.
-    - Sync mode (fallback): blocks until ElevenLabs returns the transcript.
+    PLAUD stores transcript segments in source_list where data_type == "transaction".
+    The data_content is a JSON array of segments with "content", "start_time", "speaker" fields.
     """
+    source_list = plaud_file.get("source_list", [])
+    for source in source_list:
+        if source.get("data_type") != "transaction":
+            continue
+        raw = source.get("data_content", "")
+        if not raw:
+            continue
+        try:
+            segments = json.loads(raw) if isinstance(raw, str) else raw
+            if not isinstance(segments, list) or not segments:
+                continue
+            # Combine segments with speaker labels
+            parts = []
+            for seg in segments:
+                content = seg.get("content", "").strip()
+                if not content:
+                    continue
+                speaker = seg.get("speaker") or seg.get("original_speaker") or "Speaker"
+                parts.append(f"{speaker}: {content}")
+            if parts:
+                return "\n\n".join(parts)
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return None
+
+
+async def _complete_with_transcript(task_id: str, transcript: str) -> None:
+    """Mark task as completed with transcript and trigger analysis if ready."""
+    workflow = on_task_completed(task_id, transcript)
+    if workflow["state"] == WorkflowState.EXTRACTING:
+        logger.info("All tasks done for workflow %s, starting analysis", workflow["id"])
+        await run_analysis(workflow["id"])
+
+
+async def _run_transcription(task_id: str, recording_id: str, user_id: str) -> None:
+    """Background: transcribe a recording and complete the workflow task.
+
+    Three-level transcript lookup:
+    1. Check our recordings table for existing transcript
+    2. If not found, fetch from PLAUD API (file detail may include transcript)
+    3. If still not found, trigger ElevenLabs STT
+    """
+    from services.plaud_api import fetch_plaud_file
     from services.supabase import get_supabase
 
     db = get_supabase()
-    db.table("workflow_tasks").update({"state": TaskState.TRANSCRIBING}).eq("id", task_id).execute()
 
-    # Look up plaud_file_id from recordings table
-    rec_resp = db.table("recordings").select("plaud_file_id").eq("id", recording_id).execute()
-    if not rec_resp.data or not rec_resp.data[0].get("plaud_file_id"):
+    # --- Level 1: Check our DB ---
+    rec_resp = db.table("recordings").select("plaud_file_id, transcript").eq("id", recording_id).execute()
+    if not rec_resp.data:
+        on_task_failed(task_id, f"Recording {recording_id} not found")
+        return
+
+    recording = rec_resp.data[0]
+    existing_transcript = recording.get("transcript")
+
+    if existing_transcript:
+        logger.info("Recording %s: transcript found in DB, skipping STT", recording_id)
+        await _complete_with_transcript(task_id, existing_transcript)
+        return
+
+    plaud_file_id = recording.get("plaud_file_id")
+    if not plaud_file_id:
         on_task_failed(task_id, f"Recording {recording_id} has no plaud_file_id")
         return
 
-    plaud_file_id = rec_resp.data[0]["plaud_file_id"]
+    # --- Level 2: Check PLAUD API for existing transcript ---
+    try:
+        plaud_file = await fetch_plaud_file(user_id, plaud_file_id)
+        if plaud_file:
+            plaud_transcript = _extract_plaud_transcript(plaud_file)
+            if plaud_transcript:
+                logger.info("Recording %s: transcript found from PLAUD API (%d chars), saving to DB",
+                            recording_id, len(plaud_transcript))
+                db.table("recordings").update({"transcript": plaud_transcript}).eq("id", recording_id).execute()
+                await _complete_with_transcript(task_id, plaud_transcript)
+                return
+    except Exception as e:
+        logger.warning("Failed to check PLAUD API for transcript: %s", e)
+
+    # --- Level 3: Trigger ElevenLabs STT ---
+    db.table("workflow_tasks").update({"state": TaskState.TRANSCRIBING}).eq("id", task_id).execute()
     use_webhook = bool(os.getenv("ELEVENLABS_WEBHOOK_ID"))
 
     try:
@@ -267,13 +346,9 @@ async def _run_transcription(task_id: str, recording_id: str, user_id: str) -> N
         )
 
         if transcript:
-            # Sync mode — we got the result directly
-            workflow = on_task_completed(task_id, transcript)
-            if workflow["state"] == WorkflowState.EXTRACTING:
-                add_message(workflow["id"], MessageRole.ASSISTANT, {
-                    "text": "Transcription complete. Starting analysis...",
-                })
-                await run_extraction(workflow["id"])
+            # Sync mode — save transcript back to recording for future reuse
+            db.table("recordings").update({"transcript": transcript}).eq("id", recording_id).execute()
+            await _complete_with_transcript(task_id, transcript)
         # else: webhook mode — result will arrive via webhook endpoint
 
     except Exception as e:

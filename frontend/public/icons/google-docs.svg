@@ -1,0 +1,21 @@
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Docs">
+<path id="Page" d="M5.5 1C4.67157 1 4 1.67157 4 2.5V21.5C4 22.3284 4.67157 23 5.5 23H18.5C19.3284 23 20 22.3284 20 21.5V7L14 1H5.5Z" fill="var(--fill-0, #4E8DF5)"/>
+<path id="Shadow" d="M5.5 23C4.67157 23 4 22.3284 4 21.5V21.25C4 22.0784 4.67157 22.75 5.5 22.75H18.5C19.3284 22.75 20 22.0784 20 21.25V21.5C20 22.3284 19.3284 23 18.5 23H5.5Z" fill="var(--fill-0, #417EE9)"/>
+<path id="Highlight" d="M5.5 1C4.67157 1 4 1.67157 4 2.5V2.75C4 1.92157 4.67157 1.25 5.5 1.25H14.25L14 1H5.5Z" fill="var(--fill-0, #639AF6)"/>
+<path id="Fold Shadow" d="M20.0017 12.125V7L19.1267 6.125H14.907C14.5729 6.125 14.4056 6.52893 14.6418 6.76517L20.0017 12.125Z" fill="url(#paint0_linear_0_82)"/>
+<path id="Fold" d="M14 1L20 7H15.5C14.6716 7 14 6.32843 14 5.5V1Z" fill="var(--fill-0, #A6C5FA)"/>
+<g id="Icon">
+<path d="M16 12H8V13H16V12Z" fill="var(--fill-0, white)"/>
+<path d="M16 14H8V15H16V14Z" fill="var(--fill-0, white)"/>
+<path d="M8 16H16V17H8V16Z" fill="var(--fill-0, white)"/>
+<path d="M14 18H8V19H14V18Z" fill="var(--fill-0, white)"/>
+</g>
+</g>
+<defs>
+<linearGradient id="paint0_linear_0_82" x1="17.0017" y1="12.125" x2="17.0017" y2="6" gradientUnits="userSpaceOnUse">
+<stop stop-color="#4E8DF5"/>
+<stop offset="1" stop-color="#3D6ACD"/>
+</linearGradient>
+</defs>
+</svg>

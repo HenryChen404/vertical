@@ -10,7 +10,7 @@ const INTEGRATIONS = [
     id: "google_calendar",
     name: "Google Calendar",
     description: "Link to access upcoming meetings and meeting details.",
-    icon: "https://www.figma.com/api/mcp/asset/42a3f103-0a8b-4fa1-9ac9-71a62899c3af",
+    icon: "/icons/google-calendar.svg",
     isCalendar: true,
     provider: "google",
   },
@@ -18,7 +18,7 @@ const INTEGRATIONS = [
     id: "outlook_calendar",
     name: "Outlook Calendar",
     description: "Link to access upcoming meetings and meeting details.",
-    icon: "https://www.figma.com/api/mcp/asset/6b12cd01-6a2a-4b22-9807-36b9897daf99",
+    icon: "/icons/outlook.svg",
     isCalendar: true,
     provider: "outlook",
   },
@@ -26,20 +26,20 @@ const INTEGRATIONS = [
     id: "salesforce",
     name: "Salesforce",
     description: "Sync meeting insights to update contacts and activities in Salesforce.",
-    icon: "https://www.figma.com/api/mcp/asset/9ce60435-e1e0-4acb-bc04-da24815c7956",
+    icon: "/icons/salesforce.svg",
     isCalendar: false,
     provider: "salesforce",
   },
 ];
 
 const MORE_APPS = [
-  { name: "Slack", icon: "https://www.figma.com/api/mcp/asset/1154cd58-6c85-4331-9681-d92b759cc356" },
-  { name: "OneNote", icon: "https://www.figma.com/api/mcp/asset/ad5936b6-b3cb-41f1-8bc7-ffbfe806cfad" },
-  { name: "Google Docs", icon: "https://www.figma.com/api/mcp/asset/ab1230a9-20fa-4887-b217-e246085dc9e7" },
-  { name: "Notion", icon: "https://www.figma.com/api/mcp/asset/b3636924-f318-42bc-b0a5-936f89c35b46" },
-  { name: "Teams", icon: "https://www.figma.com/api/mcp/asset/be5885e3-640c-4083-835d-0cb1ab7ab62d" },
-  { name: "Google Drive", icon: "https://www.figma.com/api/mcp/asset/f8aca1e7-e443-4a40-b722-a8465deae2c7" },
-  { name: "Dropbox", icon: "https://www.figma.com/api/mcp/asset/298ed4f6-3209-450d-b40b-c9620f6deaef" },
+  { name: "Slack", icon: "/icons/slack.svg" },
+  { name: "OneNote", icon: "/icons/onenote.svg" },
+  { name: "Google Docs", icon: "/icons/google-docs.svg" },
+  { name: "Notion", icon: "/icons/notion.svg" },
+  { name: "Teams", icon: "/icons/ms-teams.svg" },
+  { name: "Google Drive", icon: "/icons/google-drive.svg" },
+  { name: "Dropbox", icon: "/icons/dropbox.svg" },
 ];
 
 export default function IntegrationsPage() {

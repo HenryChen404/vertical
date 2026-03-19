@@ -3,16 +3,16 @@
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 
-const ICON_CLOUD = "https://www.figma.com/api/mcp/asset/38399722-597f-4ae0-bde3-3b072c8cd230";
-const ICON_DESKTOP = "https://www.figma.com/api/mcp/asset/efcc3fce-bec2-4237-8107-add882bda393";
-const ICON_TEMPLATE = "https://www.figma.com/api/mcp/asset/0240026f-7a9a-4d97-a9a5-4882370ff82d";
-const ICON_AUTOFLOW = "https://www.figma.com/api/mcp/asset/8160a991-7095-4fcb-acba-05f8e6db047f";
-const ICON_INTEGRATIONS = "https://www.figma.com/api/mcp/asset/494736b6-4daa-4247-9599-dfb818f35ce8";
-const ICON_SHARE = "https://www.figma.com/api/mcp/asset/74355094-794b-4bc4-aff7-3a542983ce4a";
-const ICON_REFER = "https://www.figma.com/api/mcp/asset/3366322a-fc31-473c-960d-d68d4faeabc4";
-const ICON_PRIVACY = "https://www.figma.com/api/mcp/asset/a423db49-b92e-406b-bc51-4c2f3b23e0c6";
-const ICON_HELP = "https://www.figma.com/api/mcp/asset/36b3253c-3748-4069-b9b3-31f4d14c851c";
-const ICON_PLAUD = "https://www.figma.com/api/mcp/asset/634ee3a6-89ec-4b36-ab07-4cc706476b5b";
+const ICON_CLOUD = "/icons/cloud.svg";
+const ICON_DESKTOP = "/icons/desktop.svg";
+const ICON_TEMPLATE = "/icons/template.svg";
+const ICON_AUTOFLOW = "/icons/autoflow.svg";
+const ICON_INTEGRATIONS = "/icons/integrations.svg";
+const ICON_SHARE = "/icons/share.svg";
+const ICON_REFER = "/icons/refer.svg";
+const ICON_PRIVACY = "/icons/privacy.svg";
+const ICON_HELP = "/icons/help.svg";
+const ICON_PLAUD = "/icons/plaud-icon.svg";
 
 interface ExploreRowProps {
   icon: string;
@@ -26,7 +26,7 @@ function ExploreRow({ icon, label, detail, href, showNew }: ExploreRowProps) {
   const content = (
     <div className="flex items-center gap-2 py-3 w-full">
       <div className="w-6 h-6 flex-shrink-0 flex items-center justify-center">
-        <img src={icon} alt="" className="w-[15px] h-[15px] object-contain" />
+        <img src={icon} alt="" className="w-[22px] h-[22px] object-contain" />
       </div>
       <span className="text-[16px] leading-6 text-[#3D3D3D] flex-1">
         {label}
