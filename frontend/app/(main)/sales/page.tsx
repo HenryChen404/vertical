@@ -11,9 +11,9 @@ import { api } from "@/lib/api";
 import type { CalendarEvent, DealListItem } from "@/lib/types";
 
 const INTEGRATION_ICONS = [
-  { name: "Google Calendar", icon: "https://www.figma.com/api/mcp/asset/42a3f103-0a8b-4fa1-9ac9-71a62899c3af" },
-  { name: "Outlook Calendar", icon: "https://www.figma.com/api/mcp/asset/6b12cd01-6a2a-4b22-9807-36b9897daf99" },
-  { name: "Salesforce", icon: "https://www.figma.com/api/mcp/asset/9ce60435-e1e0-4acb-bc04-da24815c7956" },
+  { name: "Google Calendar", icon: "/icons/google-calendar.svg" },
+  { name: "Outlook Calendar", icon: "/icons/outlook.svg" },
+  { name: "Salesforce", icon: "/icons/salesforce.svg" },
 ];
 
 function formatTime(isoStr: string): string {

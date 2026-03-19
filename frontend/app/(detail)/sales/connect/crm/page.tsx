@@ -6,11 +6,11 @@ import { BackHeader } from "@/components/layout/back-header";
 import { api } from "@/lib/api";
 
 const SALESFORCE_ICON =
-  "https://www.figma.com/api/mcp/asset/9ce60435-e1e0-4acb-bc04-da24815c7956";
+  "/icons/salesforce.svg";
 const GOOGLE_CALENDAR_ICON =
-  "https://www.figma.com/api/mcp/asset/42a3f103-0a8b-4fa1-9ac9-71a62899c3af";
+  "/icons/google-calendar.svg";
 const OUTLOOK_ICON =
-  "https://www.figma.com/api/mcp/asset/6b12cd01-6a2a-4b22-9807-36b9897daf99";
+  "/icons/outlook.svg";
 
 export default function ConnectToolsPage() {
   return (

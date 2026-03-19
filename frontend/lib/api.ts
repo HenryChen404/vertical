@@ -118,15 +118,26 @@ export const api = {
     return new EventSource(url, { withCredentials: true });
   },
   chatWorkflow: (id: string, message: string) =>
-    fetchApi<{ extractions: Record<string, unknown>; messages: unknown[]; should_push: boolean }>(
+    fetchApi<{ extractions: { proposed_changes?: import("./types").ProposedChange[]; summary?: string }; messages: unknown[]; should_push: boolean }>(
       `/api/workflows/${id}/chat`,
       { method: "POST", body: JSON.stringify({ message }) },
     ),
-  updateExtractions: (id: string, extractions: Record<string, unknown>) =>
+  updateProposedChanges: (id: string, proposedChanges: import("./types").ProposedChange[]) =>
     fetchApi<unknown>(`/api/workflows/${id}/extractions`, {
       method: "PUT",
-      body: JSON.stringify({ extractions }),
+      body: JSON.stringify({ extractions: { proposed_changes: proposedChanges } }),
     }),
   confirmWorkflow: (id: string) =>
     fetchApi<{ status: string }>(`/api/workflows/${id}/confirm`, { method: "POST" }),
+  transcribeVoice: async (audioBlob: Blob): Promise<string> => {
+    const res = await fetch(`${API_BASE}/api/workflows/transcribe-voice`, {
+      method: "POST",
+      headers: { "Content-Type": audioBlob.type || "audio/webm" },
+      credentials: "include",
+      body: audioBlob,
+    });
+    if (!res.ok) throw new Error(`Transcribe failed: ${res.status}`);
+    const data = await res.json();
+    return data.text;
+  },
 };

@@ -14,6 +14,7 @@ class WorkflowState(IntEnum):
     CREATED = 0
     TRANSCRIBING = 1
     EXTRACTING = 2
+    ANALYZING = 2  # Alias — same state, clearer name
     REVIEW = 3
     PUSHING = 4
     DONE = 5

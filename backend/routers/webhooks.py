@@ -634,15 +634,15 @@ async def elevenlabs_transcription_webhook(request: Request):
     logger.info("ElevenLabs transcription completed for task %s (%d chars), workflow state=%s",
                 task_id, len(transcript), workflow["state"])
 
-    # If all tasks done, start extraction
+    # Save transcript back to recording for future reuse
+    db.table("recordings").update({"transcript": transcript}).eq("id", task["recording_id"]).execute()
+
+    # If all tasks done, start analysis
     from services.workflow import WorkflowState
     if workflow["state"] == WorkflowState.EXTRACTING:
-        from services.messages import MessageRole, add_message
-        from services.crm_service import run_extraction
+        from services.crm_service import run_analysis
         import asyncio
-        add_message(workflow["id"], MessageRole.ASSISTANT, {
-            "text": "Transcription complete. Starting analysis...",
-        })
-        asyncio.create_task(run_extraction(workflow["id"]))
+        logger.info("All tasks done for workflow %s (via webhook), starting analysis", workflow["id"])
+        asyncio.create_task(run_analysis(workflow["id"]))
 
     return {"status": "ok", "task_id": task_id}

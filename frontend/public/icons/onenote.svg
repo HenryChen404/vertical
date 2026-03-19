@@ -1,0 +1,21 @@
+<svg width="24" height="24" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="ms-onenote 1">
+<path id="Vector" d="M5 14.375H20V17.5C20 18.1904 19.4404 18.75 18.75 18.75H6.25C5.55964 18.75 5 18.1904 5 17.5V14.375Z" fill="var(--fill-0, #5D29A1)"/>
+<path id="Vector_2" d="M5 10H20V14.375H5V10Z" fill="var(--fill-0, #7F32CC)"/>
+<path id="Vector_3" d="M5 5.625H20V10H5V5.625Z" fill="var(--fill-0, #9A40D6)"/>
+<path id="Vector_4" d="M6.25 1.25C5.55964 1.25 5 1.80964 5 2.5V17.5C5 18.1904 5.55964 18.75 6.25 18.75H15V5.625H20V2.5C20 1.80964 19.4404 1.25 18.75 1.25H6.25Z" fill="url(#paint0_linear_0_68)"/>
+<path id="Vector_5" d="M5 7.5C5 6.46444 5.83947 5.625 6.875 5.625H10.625C11.6606 5.625 12.5 6.46444 12.5 7.5V15C12.5 16.0356 11.6606 16.875 10.625 16.875H5V7.5Z" fill="var(--fill-0, black)" fill-opacity="0.3"/>
+<path id="Vector_6" d="M10 4.375H1.25C0.559644 4.375 0 4.93464 0 5.625V14.375C0 15.0654 0.559644 15.625 1.25 15.625H10C10.6904 15.625 11.25 15.0654 11.25 14.375V5.625C11.25 4.93464 10.6904 4.375 10 4.375Z" fill="url(#paint1_linear_0_68)"/>
+<path id="Vector_7" d="M8.125 13.125V6.875H6.80581V10.5179L4.35194 6.875H3.125V13.125H4.42574V9.34819L6.97187 13.125H8.125Z" fill="var(--fill-0, white)"/>
+</g>
+<defs>
+<linearGradient id="paint0_linear_0_68" x1="5" y1="10" x2="15.3125" y2="10" gradientUnits="userSpaceOnUse">
+<stop stop-color="#8C42AC"/>
+<stop offset="1" stop-color="#C36DEF"/>
+</linearGradient>
+<linearGradient id="paint1_linear_0_68" x1="0" y1="10" x2="11.875" y2="10" gradientUnits="userSpaceOnUse">
+<stop stop-color="#44176C"/>
+<stop offset="1" stop-color="#621F9C"/>
+</linearGradient>
+</defs>
+</svg>

@@ -4,11 +4,11 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { X, Check } from "lucide-react";
 
-const IMG_GOOGLE_CALENDAR = "https://www.figma.com/api/mcp/asset/486928f8-9916-4c98-bc7f-0cac88978ece";
-const IMG_OUTLOOK = "https://www.figma.com/api/mcp/asset/9a342f86-faa3-43a2-a621-bb3cfa5c69e3";
-const IMG_SALESFORCE = "https://www.figma.com/api/mcp/asset/7185efb8-beaf-41b4-be5b-82f33a21848b";
-const IMG_LINK_ICON = "https://www.figma.com/api/mcp/asset/622700cd-b7c0-46e5-af79-2456ca571a4b";
-const IMG_SMALL_CALENDAR = "https://www.figma.com/api/mcp/asset/2473c1e4-1a2d-47d9-86a5-d6043fce2c5d";
+const IMG_GOOGLE_CALENDAR = "/icons/google-calendar.svg";
+const IMG_OUTLOOK = "/icons/outlook.svg";
+const IMG_SALESFORCE = "/icons/salesforce.svg";
+const IMG_LINK_ICON = "/icons/link.svg";
+const IMG_SMALL_CALENDAR = "/icons/calendar-small.svg";
 
 const FEATURES = [
   "See upcoming meetings from your calendar",

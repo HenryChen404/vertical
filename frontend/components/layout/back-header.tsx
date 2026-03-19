@@ -23,7 +23,7 @@ export function BackHeader({ title, rightAction, fallbackHref }: BackHeaderProps
   };
 
   return (
-    <div className="relative flex items-center h-11 px-6 shrink-0">
+    <div className="relative flex items-center h-11 px-6 shrink-0 border-b border-[#E8E8E8]">
       <button onClick={handleBack} className="z-10">
         <ChevronLeft className="w-6 h-6" />
       </button>
