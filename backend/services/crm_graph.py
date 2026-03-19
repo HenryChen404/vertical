@@ -200,7 +200,13 @@ async def get_graph():
 
     if not _checkpointer_ready:
         checkpointer = AsyncPostgresSaver(_pool)
-        await checkpointer.setup()
+        try:
+            await checkpointer.setup()
+        except Exception as e:
+            # Transaction-mode poolers (e.g. Supavisor) can't run
+            # CREATE INDEX CONCURRENTLY inside a transaction block.
+            # Tables already exist from migrations, so this is safe to skip.
+            logger.warning("Checkpointer setup skipped (tables likely exist): %s", e)
         _checkpointer_ready = True
 
     return builder.compile(checkpointer=AsyncPostgresSaver(_pool))
