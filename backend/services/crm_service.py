@@ -203,8 +203,19 @@ async def push_to_crm(workflow_id: str) -> None:
         if failures and not successes:
             logger.error("Workflow %s: all pushes failed — %s", workflow_id,
                          "; ".join(r.get("error", "Unknown") for r in failures))
+            add_message(workflow_id, MessageRole.ASSISTANT, {
+                "text": "Some changes failed to push to Salesforce. You can try again.",
+            })
             update_workflow_state(workflow_id, WorkflowState.FAILED)
         else:
+            if failures:
+                add_message(workflow_id, MessageRole.ASSISTANT, {
+                    "text": f"Pushed {len(successes)} changes to Salesforce. {len(failures)} failed.",
+                })
+            else:
+                add_message(workflow_id, MessageRole.ASSISTANT, {
+                    "text": "All changes have been pushed to Salesforce successfully.",
+                })
             update_workflow_state(workflow_id, WorkflowState.DONE)
             logger.info("CRM push completed for workflow %s: %d ok, %d failed",
                         workflow_id, len(successes), len(failures))
@@ -235,6 +246,9 @@ async def push_to_crm(workflow_id: str) -> None:
         logger.error("CRM push failed for workflow %s: %s", workflow_id, e)
         logger.info("⏱ TIMING [push] workflow=%s total=%dms error=%s",
                      workflow_id, _ms(t0), e)
+        add_message(workflow_id, MessageRole.ASSISTANT, {
+            "text": "Something went wrong pushing to Salesforce. You can try again.",
+        })
         update_workflow_state(workflow_id, WorkflowState.FAILED)
 
 

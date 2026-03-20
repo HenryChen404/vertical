@@ -42,7 +42,6 @@ export default function UpdateCrmReviewPage() {
   const [isPushing, setIsPushing] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
-  const pushDoneRef = useRef(false);
 
   // Extract latest proposed_changes from messages
   const latestChanges = useMemo(() => {
@@ -84,6 +83,7 @@ export default function UpdateCrmReviewPage() {
           setSseProgress(null);
           api.getWorkflowMessages(wfId).then(setMessages);
           if (data.workflow_state === WF.DONE || data.workflow_state === WF.FAILED) {
+            setIsPushing(false);
             es.close();
           }
         }
@@ -103,45 +103,10 @@ export default function UpdateCrmReviewPage() {
   const handleConfirm = async () => {
     if (!workflowId || isPushing) return;
     setIsPushing(true);
-    pushDoneRef.current = false;
     try {
       await api.confirmWorkflow(workflowId);
-      const poll = setInterval(async () => {
-        if (pushDoneRef.current) return;
-        const wf = await api.getWorkflow(workflowId);
-        if (wf.state === WF.DONE) {
-          if (pushDoneRef.current) return;
-          pushDoneRef.current = true;
-          clearInterval(poll);
-          setIsPushing(false);
-          setWorkflowState(WF.DONE);
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: `done-${Date.now()}`,
-              workflow_id: workflowId,
-              role: 1,
-              content: { text: "All changes have been pushed to Salesforce successfully." },
-              created_at: new Date().toISOString(),
-            },
-          ]);
-        } else if (wf.state === WF.FAILED) {
-          if (pushDoneRef.current) return;
-          pushDoneRef.current = true;
-          clearInterval(poll);
-          setIsPushing(false);
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: `fail-${Date.now()}`,
-              workflow_id: workflowId,
-              role: 1,
-              content: { text: "Some changes failed to push. You can try again." },
-              created_at: new Date().toISOString(),
-            },
-          ]);
-        }
-      }, 1500);
+      // SSE will pick up PUSHING → DONE/FAILED state transitions
+      // and fetch the completion message from DB automatically
     } catch (e) {
       console.error("Push failed:", e);
       setIsPushing(false);
