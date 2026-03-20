@@ -7,20 +7,117 @@ from typing import Any
 
 
 def build_analysis_prompt(crm_context: dict[str, Any]) -> str:
-    """Build the system prompt for meeting transcript analysis.
-
-    Args:
-        crm_context: Current CRM state from the event's sales_details.
-            Expected shape: {
-                "opportunity": {"id", "name", "amount", "stage", "close_date", ...},
-                "account": {"id", "name", "annual_revenue", "industry", ...},
-                "participants": [{"name", "email", "status"}, ...],
-                "event": {"id", "subject", "description", "start_time", "end_time"},
-            }
-    """
+    """Build the system prompt for meeting transcript analysis (legacy, single-call)."""
     context_json = json.dumps(crm_context, indent=2, default=str) if crm_context else "{}"
+    return _BASE_ANALYSIS_PROMPT.format(context_json=context_json) + _ALL_OBJECT_INSTRUCTIONS + _OUTPUT_RULES
 
-    return f"""\
+
+# --- Parallel analysis: focused prompts per object type ---
+
+_ANALYSIS_CATEGORIES: list[dict[str, Any]] = [
+    {
+        "name": "opportunity",
+        "allowed_types": {"Opportunity"},
+        "instructions": """\
+### Opportunity Updates (object_type: "Opportunity")
+- **Stage progression**: Only propose if the conversation clearly indicates \
+movement. Evidence patterns:
+  - "They asked for a demo / want to learn more" → Prospecting → Qualification
+  - "They want to see a proposal / asked for pricing" → Qualification → Proposal/Price Quote
+  - "Let's discuss pricing terms / negotiate contract" → Proposal → Negotiation/Review
+  - "We have verbal agreement / they want to proceed" → Negotiation → Closed Won
+  - Do NOT advance stage just because a meeting happened
+- **Amount**: Only if a specific number was discussed or revised
+- **CloseDate**: Only if explicitly mentioned or clearly shifted
+- **NextStep**: Concrete follow-up actions agreed upon (not vague intentions)
+- **Probability**: Only if win likelihood was explicitly discussed
+
+Common Salesforce Opportunity fields:
+- StageName (picklist), Amount (currency), CloseDate (date, ISO format)
+- NextStep (text), Probability (integer 0-100), Description (long text)
+""",
+    },
+    {
+        "name": "account",
+        "allowed_types": {"Account"},
+        "instructions": """\
+### Account Updates (object_type: "Account")
+- **Industry**: Only if explicitly stated or corrected
+- **AnnualRevenue**: Only if a specific figure was mentioned
+- **Description**: Key business insights worth persisting
+
+Common Salesforce Account fields:
+- Industry (text), AnnualRevenue (currency), Description (long text)
+- NumberOfEmployees (integer), Website (url)
+""",
+    },
+    {
+        "name": "event",
+        "allowed_types": {"Event"},
+        "instructions": """\
+### Event Summary (object_type: "Event")
+- **Description**: Write a concise 2-3 sentence summary focusing on outcomes, \
+not a play-by-play. Write in past tense, professional tone.
+- Only update the Event record that corresponds to this meeting
+
+Common Salesforce Event fields:
+- Description (long text), Subject (text)
+""",
+    },
+    {
+        "name": "task",
+        "allowed_types": {"Task"},
+        "instructions": """\
+### Tasks (object_type: "Task", action: "create")
+- Only create tasks for **explicit commitments** with a clear owner
+- "I'll send over the proposal by Friday" → Task
+- "We should think about..." → NOT a Task
+- Include due date only if actually stated
+
+Salesforce Task fields:
+- Subject (text), Description (long text)
+- ActivityDate (date, ISO format)
+- WhoId (Contact ID), WhatId (Opportunity/Account ID)
+- Priority (High/Normal/Low), Status (Not Started/In Progress/Completed)
+""",
+    },
+    {
+        "name": "contact",
+        "allowed_types": {"Contact"},
+        "instructions": """\
+### Contact Updates (object_type: "Contact")
+- Update title/role only if the person explicitly stated a change
+- Do NOT create contacts just because a name was mentioned
+
+Common Salesforce Contact fields:
+- Title (text), Phone (phone), Email (email), Department (text)
+""",
+    },
+]
+
+
+def get_analysis_categories() -> list[dict[str, Any]]:
+    """Return the analysis category definitions for parallel execution."""
+    return _ANALYSIS_CATEGORIES
+
+
+def build_focused_analysis_prompt(crm_context: dict[str, Any], category: dict) -> str:
+    """Build a focused system prompt for a single analysis category."""
+    context_json = json.dumps(crm_context, indent=2, default=str) if crm_context else "{}"
+    allowed = ", ".join(sorted(category["allowed_types"]))
+    restriction = (
+        f"\n## IMPORTANT\n\n"
+        f"You MUST ONLY propose changes for these object types: **{allowed}**.\n"
+        f"Do NOT propose changes for any other Salesforce object types. "
+        f"If you find no relevant changes, return zero proposed_changes.\n\n"
+    )
+    return _BASE_ANALYSIS_PROMPT.format(context_json=context_json) + \
+        restriction + "## What To Look For\n\n" + category["instructions"] + _OUTPUT_RULES
+
+
+# --- Shared prompt fragments ---
+
+_BASE_ANALYSIS_PROMPT = """\
 You are a sales operations assistant that analyzes meeting transcripts and \
 proposes CRM updates for Salesforce.
 
@@ -46,6 +143,9 @@ impression recorded shortly after the meeting. Treat this as high-signal subject
 context — it may reveal sentiment, concerns, or priorities not explicit in the transcript. \
 Factor it into your assessment but do not quote it directly in CRM field updates.
 
+"""
+
+_ALL_OBJECT_INSTRUCTIONS = """\
 ## What To Look For
 
 ### Opportunity Updates (object_type: "Opportunity")
@@ -101,6 +201,9 @@ Salesforce Task fields:
 Common Salesforce Contact fields:
 - Title (text), Phone (phone), Email (email), Department (text)
 
+"""
+
+_OUTPUT_RULES = """\
 ## Output Rules
 
 - Every proposed change MUST be supported by evidence from the transcript
@@ -117,7 +220,7 @@ if unknown
 - Write text field values in professional sales language, not raw transcript \
 quotes
 - The `summary` field should be 1-2 sentences explaining your overall \
-assessment
+assessment of ONLY the object types you are analyzing
 """
 
 

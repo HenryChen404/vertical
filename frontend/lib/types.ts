@@ -227,6 +227,7 @@ export interface WorkflowStreamEvent {
   tasks_completed: number;
   tasks_failed: number;
   message?: string;
+  analysis_progress?: { completed: number; total: number };
   extractions?: {
     proposed_changes?: ProposedChange[];
     summary?: string;
