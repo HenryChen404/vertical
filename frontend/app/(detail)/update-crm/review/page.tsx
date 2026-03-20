@@ -75,7 +75,11 @@ export default function UpdateCrmReviewPage() {
 
         if (data.workflow_state < WF.REVIEW) {
           setSseMessage(data.message || SSE_LABELS[data.workflow_state] || "Processing...");
-          if (data.tasks_total > 0) {
+          if (data.analysis_progress) {
+            setSseProgress({ completed: data.analysis_progress.completed, total: data.analysis_progress.total });
+          } else if (data.workflow_state === WF.ANALYZING) {
+            setSseProgress({ completed: 0, total: 0 });
+          } else if (data.tasks_total > 0) {
             setSseProgress({ completed: data.tasks_completed, total: data.tasks_total });
           }
         } else {
@@ -205,7 +209,12 @@ export default function UpdateCrmReviewPage() {
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
         {/* AI thinking bubble during processing */}
         {isProcessing && (
-          <ThinkingBubble>
+          <ThinkingBubble
+            progress={
+              workflowState === WF.ANALYZING && sseProgress && sseProgress.total > 0
+                ? sseProgress : undefined
+            }
+          >
             {workflowState === WF.TRANSCRIBING && sseProgress && sseProgress.total > 0
               ? `Transcribing recordings (${sseProgress.completed}/${sseProgress.total})...`
               : sseMessage || SSE_LABELS[workflowState] || "Thinking..."}
@@ -333,13 +342,32 @@ export default function UpdateCrmReviewPage() {
 
 // --- Thinking bubble ---
 
-function ThinkingBubble({ children }: { children: React.ReactNode }) {
+function ThinkingBubble({ children, progress }: { children: React.ReactNode; progress?: { completed: number; total: number } }) {
+  const [displayPct, setDisplayPct] = useState(0);
+  const targetPct = progress && progress.total > 0
+    ? Math.round((progress.completed / progress.total) * 100)
+    : 0;
+
+  useEffect(() => {
+    if (targetPct <= displayPct) return;
+    // Animate in 2% steps every 30ms for smooth fill
+    const step = 2;
+    const interval = setInterval(() => {
+      setDisplayPct((prev) => {
+        const next = Math.min(prev + step, targetPct);
+        if (next >= targetPct) clearInterval(interval);
+        return next;
+      });
+    }, 30);
+    return () => clearInterval(interval);
+  }, [targetPct]);
+
   return (
     <div className="flex items-start gap-2">
       <div className="w-8 h-8 rounded-full bg-black flex items-center justify-center shrink-0">
         <Bot className="w-[18px] h-[18px] text-white" />
       </div>
-      <div className="bg-white rounded-xl px-4 py-3 border border-[#E8E8E8] w-fit">
+      <div className="bg-white rounded-xl px-4 py-3 border border-[#E8E8E8] min-w-[220px]">
         <div className="flex items-center gap-2.5">
           <div className="flex items-end gap-1 h-5">
             <span className="w-[7px] h-[7px] bg-[#999] rounded-full animate-[bigBounce_1.4s_ease-in-out_infinite_0ms]" />
@@ -348,6 +376,17 @@ function ThinkingBubble({ children }: { children: React.ReactNode }) {
           </div>
           <span className="text-[14px] text-[var(--text-gray)]">{children}</span>
         </div>
+        {progress && progress.total > 0 && (
+          <div className="mt-2.5 flex items-center gap-2.5">
+            <div className="flex-1 h-1.5 bg-[#E8E8E8] rounded-full overflow-hidden">
+              <div
+                className="h-full bg-black rounded-full"
+                style={{ width: `${displayPct}%` }}
+              />
+            </div>
+            <span className="text-[12px] text-[var(--text-gray)] tabular-nums shrink-0 w-[32px] text-right">{displayPct}%</span>
+          </div>
+        )}
       </div>
     </div>
   );

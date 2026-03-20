@@ -55,10 +55,29 @@ async def run_analysis(workflow_id: str) -> dict:
                 bool(crm_context.get("account")),
                 bool(crm_context.get("user_feedback")))
 
-    # Run the sales analyst agent
+    # Run the sales analyst agent with progress tracking
     logger.info("Workflow %s: calling sales analyst agent...", workflow_id)
+
+    from skills.sales_analyst.prompts import get_analysis_categories
+    total_steps = len(get_analysis_categories())
+
+    # Write initial progress so frontend shows progress bar immediately
+    db.table("workflows").update({
+        "extractions": {"_analysis_progress": {"completed": 0, "total": total_steps, "phase": "analyzing"}},
+    }).eq("id", workflow_id).execute()
+
+    async def _on_progress(completed: int, total: int, cat_name: str):
+        phase = "summarizing" if cat_name == "_summary" else "analyzing"
+        db.table("workflows").update({
+            "extractions": {"_analysis_progress": {
+                "completed": min(completed, total_steps),
+                "total": total_steps,
+                "phase": phase,
+            }},
+        }).eq("id", workflow_id).execute()
+
     t_llm = time.time()
-    result = await _skill_run_analysis(combined_text, crm_context)
+    result = await _skill_run_analysis(combined_text, crm_context, on_progress=_on_progress)
     llm_ms = _ms(t_llm)
     logger.info("Workflow %s: analysis complete — %d proposed changes",
                 workflow_id, len(result.proposed_changes))

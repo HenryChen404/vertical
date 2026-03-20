@@ -128,6 +128,7 @@ async def stream_workflow_endpoint(
     async def event_generator():
         prev_state = None
         prev_task_states: dict[str, int] = {}
+        prev_analysis_progress = None
 
         while True:
             workflow = get_workflow(workflow_id)
@@ -144,8 +145,17 @@ async def stream_workflow_endpoint(
             failed = sum(1 for t in tasks if t["state"] == TaskState.FAILED)
             task_states = {t["id"]: t["state"] for t in tasks}
 
-            # Emit on state change or task progress change
-            if current_state != prev_state or task_states != prev_task_states:
+            # Track analysis progress changes
+            extractions = workflow.get("extractions") or {}
+            analysis_progress = extractions.get("_analysis_progress")
+
+            # Emit on state change, task progress change, or analysis progress change
+            has_change = (
+                current_state != prev_state
+                or task_states != prev_task_states
+                or analysis_progress != prev_analysis_progress
+            )
+            if has_change:
                 event = {
                     "workflow_state": current_state,
                     "tasks_total": total,
@@ -156,8 +166,20 @@ async def stream_workflow_endpoint(
                 if current_state == WorkflowState.TRANSCRIBING:
                     event["message"] = f"Transcribing: {completed}/{total} completed"
                 elif current_state == WorkflowState.EXTRACTING:
-                    event["message"] = "Analyzing meeting data..."
-                    event["extractions"] = workflow.get("extractions", {})
+                    extractions = workflow.get("extractions") or {}
+                    progress = extractions.get("_analysis_progress", {})
+                    ac = progress.get("completed", 0)
+                    at = progress.get("total", 0)
+                    phase = progress.get("phase", "analyzing")
+                    if phase == "summarizing":
+                        event["message"] = "Preparing summary..."
+                    elif at > 0:
+                        event["message"] = "Analyzing meeting data..."
+                    else:
+                        event["message"] = "Analyzing meeting data..."
+                    if at > 0:
+                        event["analysis_progress"] = {"completed": ac, "total": at}
+                    event["extractions"] = extractions
                 elif current_state == WorkflowState.REVIEW:
                     event["message"] = "Ready for review"
                     event["extractions"] = workflow.get("extractions", {})
@@ -175,6 +197,7 @@ async def stream_workflow_endpoint(
                 yield f"data: {json.dumps(event)}\n\n"
                 prev_state = current_state
                 prev_task_states = task_states
+                prev_analysis_progress = analysis_progress
 
             await asyncio.sleep(2)
 

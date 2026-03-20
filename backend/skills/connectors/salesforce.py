@@ -7,6 +7,7 @@ Tool slugs:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any
@@ -18,7 +19,7 @@ async def push_changes(
     proposed_changes: list[dict],
     user_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Push approved proposed changes to Salesforce.
+    """Push approved proposed changes to Salesforce (concurrently).
 
     Args:
         proposed_changes: List of ProposedChange dicts.
@@ -41,72 +42,83 @@ async def push_changes(
             if c.get("approved")
         ]
 
-    results = []
+    tasks = []
     for change in proposed_changes:
         if not change.get("approved"):
             continue
-
-        change_id = change["id"]
-        object_type = change["object_type"]
-        action = change["action"]
         fields = {diff["field"]: diff["new"] for diff in change.get("changes", [])}
-
         if not fields:
             continue
+        tasks.append(_push_one(client, account, uid, change, fields))
 
-        try:
-            t0 = time.time()
-            if action == "update" and change.get("record_id"):
-                resp = client.tools.execute(
-                    slug="SALESFORCE_SOBJECT_ROWS_UPDATE",
-                    arguments={
-                        "sobject_api_name": object_type,
-                        "record_id": change["record_id"],
-                        "fields": fields,
-                    },
-                    connected_account_id=account.id,
-                    user_id=uid,
-                    dangerously_skip_version_check=True,
-                )
-                _check_response(resp, f"Update {object_type} {change['record_id']}")
-                ms = int((time.time() - t0) * 1000)
-                logger.info("⏱ TIMING [push_record] %s update %s %s — %dms",
-                            change_id, object_type, change["record_id"], ms)
-                results.append({"change_id": change_id, "success": True})
+    if not tasks:
+        return []
 
-            elif action == "create":
-                resp = client.tools.execute(
-                    slug="SALESFORCE_CREATE_S_OBJECT_RECORD",
-                    arguments={
-                        "sobject_type": object_type,
-                        "fields": fields,
-                    },
-                    connected_account_id=account.id,
-                    user_id=uid,
-                    dangerously_skip_version_check=True,
-                )
-                _check_response(resp, f"Create {object_type}")
-                ms = int((time.time() - t0) * 1000)
-                logger.info("⏱ TIMING [push_record] %s create %s — %dms",
-                            change_id, object_type, ms)
-                results.append({"change_id": change_id, "success": True})
+    return list(await asyncio.gather(*tasks))
 
-            else:
-                logger.warning(
-                    "Skipping change %s: action=%s, record_id=%s",
-                    change_id, action, change.get("record_id"),
-                )
-                results.append({
-                    "change_id": change_id,
-                    "success": False,
-                    "error": f"Cannot {action} without record_id",
-                })
 
-        except Exception as e:
-            logger.error("Failed to push change %s: %s", change_id, e)
-            results.append({"change_id": change_id, "success": False, "error": str(e)})
+async def _push_one(
+    client: Any,
+    account: Any,
+    uid: str,
+    change: dict,
+    fields: dict,
+) -> dict[str, Any]:
+    """Push a single change to Salesforce."""
+    change_id = change["id"]
+    object_type = change["object_type"]
+    action = change["action"]
 
-    return results
+    try:
+        t0 = time.time()
+        if action == "update" and change.get("record_id"):
+            resp = await asyncio.to_thread(
+                client.tools.execute,
+                slug="SALESFORCE_SOBJECT_ROWS_UPDATE",
+                arguments={
+                    "sobject_api_name": object_type,
+                    "record_id": change["record_id"],
+                    "fields": fields,
+                },
+                connected_account_id=account.id,
+                user_id=uid,
+                dangerously_skip_version_check=True,
+            )
+            _check_response(resp, f"Update {object_type} {change['record_id']}")
+            ms = int((time.time() - t0) * 1000)
+            logger.info("⏱ TIMING [push_record] %s update %s %s — %dms",
+                        change_id, object_type, change["record_id"], ms)
+            return {"change_id": change_id, "success": True}
+
+        elif action == "create":
+            resp = await asyncio.to_thread(
+                client.tools.execute,
+                slug="SALESFORCE_CREATE_S_OBJECT_RECORD",
+                arguments={
+                    "sobject_type": object_type,
+                    "fields": fields,
+                },
+                connected_account_id=account.id,
+                user_id=uid,
+                dangerously_skip_version_check=True,
+            )
+            _check_response(resp, f"Create {object_type}")
+            ms = int((time.time() - t0) * 1000)
+            logger.info("⏱ TIMING [push_record] %s create %s — %dms",
+                        change_id, object_type, ms)
+            return {"change_id": change_id, "success": True}
+
+        else:
+            logger.warning(
+                "Skipping change %s: action=%s, record_id=%s",
+                change_id, action, change.get("record_id"),
+            )
+            return {"change_id": change_id, "success": False,
+                    "error": f"Cannot {action} without record_id"}
+
+    except Exception as e:
+        logger.error("Failed to push change %s: %s", change_id, e)
+        return {"change_id": change_id, "success": False, "error": str(e)}
 
 
 def _check_response(resp: Any, context: str) -> None:

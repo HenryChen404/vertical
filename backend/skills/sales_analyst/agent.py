@@ -12,13 +12,19 @@ from typing import Any
 from google import genai
 from google.genai import types as genai_types
 
-from skills.sales_analyst.prompts import build_analysis_prompt, build_review_prompt
-from skills.sales_analyst.schemas import AnalysisResult
+from skills.sales_analyst.prompts import (
+    build_analysis_prompt,
+    build_focused_analysis_prompt,
+    build_review_prompt,
+    get_analysis_categories,
+)
+from skills.sales_analyst.schemas import AnalysisResult, ProposedChange
 from skills.sales_analyst.tools import REVIEW_TOOL_DECLARATIONS, execute_tool
 
 logger = logging.getLogger(__name__)
 
 MODEL = "gemini-3-flash-preview"
+MODEL_LITE = "gemini-3.1-flash-lite-preview"
 
 
 def _get_client() -> genai.Client:
@@ -82,29 +88,16 @@ _ANALYSIS_OUTPUT_SCHEMA = {
 }
 
 
-# --- Analysis ---
+# --- Analysis (parallel) ---
 
 
-async def run_analysis(
-    transcript: str,
-    crm_context: dict[str, Any],
-) -> AnalysisResult:
-    """Analyze a meeting transcript and propose CRM changes.
-
-    Args:
-        transcript: Combined meeting transcript text.
-        crm_context: Current CRM state (opportunity, account, participants, event).
-
-    Returns:
-        AnalysisResult with proposed_changes and summary.
-    """
-    client = _get_client()
-    system_prompt = build_analysis_prompt(crm_context)
-
-    user_content = (
-        "Analyze the following meeting transcript and propose CRM changes.\n\n"
-        f"Transcript:\n{transcript}"
-    )
+async def _run_single_analysis(
+    client: genai.Client,
+    system_prompt: str,
+    user_content: str,
+    category_name: str,
+) -> tuple[list[dict], str]:
+    """Run a single focused analysis call and return (proposed_changes, summary)."""
 
     def _call():
         return client.models.generate_content(
@@ -115,20 +108,160 @@ async def run_analysis(
                 response_mime_type="application/json",
                 response_schema=_ANALYSIS_OUTPUT_SCHEMA,
                 temperature=0.2,
+                thinking_config=genai_types.ThinkingConfig(
+                    thinking_level="MEDIUM",
+                ),
             ),
         )
 
     t0 = time.time()
-    logger.info("Analysis: calling Gemini (prompt ~%d chars, transcript ~%d chars)...",
-                len(system_prompt), len(user_content))
-    response = await asyncio.to_thread(_call)
+    try:
+        response = await asyncio.wait_for(asyncio.to_thread(_call), timeout=30)
+    except asyncio.TimeoutError:
+        logger.warning("⏱ TIMING [analysis:%s] timed out at %.1fs, skipping",
+                        category_name, time.time() - t0)
+        return [], ""
     elapsed = time.time() - t0
     result = json.loads(response.text.strip())
+    changes = result.get("proposed_changes", [])
+    summary = result.get("summary", "")
     logger.info(
-        "Analysis completed in %.1fs: %d proposed changes, ~%d output chars",
-        elapsed, len(result.get("proposed_changes", [])), len(response.text),
+        "⏱ TIMING [analysis:%s] %.1fs — %d changes, ~%d output chars",
+        category_name, elapsed, len(changes), len(response.text),
     )
-    return AnalysisResult(**result)
+    return changes, summary
+
+
+async def run_analysis(
+    transcript: str,
+    crm_context: dict[str, Any],
+    on_progress: Any | None = None,
+) -> AnalysisResult:
+    """Analyze a meeting transcript and propose CRM changes (parallel).
+
+    Splits analysis into focused sub-calls per object type category,
+    runs them concurrently, and merges the results.
+
+    Args:
+        on_progress: Optional async callback(completed, total, category_name)
+                     called each time a sub-analysis finishes.
+    """
+    client = _get_client()
+    categories = get_analysis_categories()
+
+    user_content = (
+        "Analyze the following meeting transcript and propose CRM changes.\n\n"
+        f"Transcript:\n{transcript}"
+    )
+
+    total = len(categories)
+    logger.info(
+        "Analysis: launching %d parallel Gemini calls (transcript ~%d chars)...",
+        total, len(user_content),
+    )
+
+    # Launch all sub-analyses concurrently, track progress via as_completed
+    async def _tracked(cat: dict):
+        prompt = build_focused_analysis_prompt(crm_context, cat)
+        result = await _run_single_analysis(client, prompt, user_content, cat["name"])
+        return cat["name"], result
+
+    pending = [_tracked(cat) for cat in categories]
+    results = []
+    completed = 0
+    for coro in asyncio.as_completed(pending):
+        cat_name, result = await coro
+        completed += 1
+        results.append(result)
+        if on_progress:
+            await on_progress(completed, total, cat_name)
+
+    # Merge proposed_changes and re-number IDs
+    all_changes = []
+    summaries = []
+    for changes, summary in results:
+        all_changes.extend(changes)
+        if summary:
+            summaries.append(summary)
+
+    for i, change in enumerate(all_changes, 1):
+        change["id"] = f"chg_{i}"
+
+    logger.info("Analysis merged: %d total proposed changes from %d sub-calls",
+                len(all_changes), len(categories))
+
+    # Signal summary phase — progress full, entering summarization
+    if on_progress:
+        await on_progress(total, total, "_summary")
+
+    # Generate a concise overall summary using lite model
+    combined_summary = await _generate_summary(client, all_changes, summaries)
+
+    return AnalysisResult(
+        proposed_changes=[ProposedChange(**c) for c in all_changes],
+        summary=combined_summary,
+    )
+
+
+async def _generate_summary(
+    client: genai.Client,
+    changes: list[dict],
+    sub_summaries: list[str],
+) -> str:
+    """Generate a concise overall summary using the lite model."""
+    if not changes:
+        return "No significant CRM changes were identified from this meeting."
+
+    # Build a compact view of changes for the summary model
+    change_lines = []
+    for c in changes:
+        fields = ", ".join(d["label"] for d in c.get("changes", []))
+        action = "Update" if c.get("action") == "update" else "Create"
+        change_lines.append(f"- {action} {c.get('object_type')}: {fields}")
+
+    prompt = f"""\
+You are a sales AI assistant writing a post-meeting brief for a sales rep.
+
+Write a short brief (3-5 lines) that a rep would want to read immediately after a call. \
+Think of it as a smart colleague telling you "here's what matters from that call":
+
+- Lead with the deal signal: did the deal move forward, stall, or surface a risk?
+- Call out specific numbers, dates, or commitments that changed
+- If there are follow-up tasks, mention the most urgent one
+- Use natural, direct language — not corporate jargon
+
+## Formatting
+
+- Use **bold** to highlight key signals: stage changes, dollar amounts, dates, risk flags
+- Use a bullet list for distinct insights (2-4 bullets max)
+- Keep each bullet to one line
+- Do NOT use headings or nested lists
+
+Do NOT list every CRM field change. Focus on the "so what" — why should the rep care?
+
+Context from analysis:
+{chr(10).join(sub_summaries)}
+
+CRM changes being proposed:
+{chr(10).join(change_lines)}
+"""
+
+    def _call():
+        return client.models.generate_content(
+            model=MODEL_LITE,
+            contents="Generate the summary.",
+            config=genai_types.GenerateContentConfig(
+                system_instruction=prompt,
+                temperature=0.3,
+            ),
+        )
+
+    t0 = time.time()
+    response = await asyncio.to_thread(_call)
+    elapsed = time.time() - t0
+    summary = response.text.strip()
+    logger.info("⏱ TIMING [analysis:summary] %.1fs — %d chars", elapsed, len(summary))
+    return summary
 
 
 # --- Review chat ---
@@ -174,6 +307,9 @@ async def chat_review(
             system_instruction=system_prompt,
             tools=[genai_types.Tool(function_declarations=REVIEW_TOOL_DECLARATIONS)],
             temperature=0.3,
+            thinking_config=genai_types.ThinkingConfig(
+                thinking_level="MEDIUM",
+            ),
         ),
     )
     elapsed = time.time() - t0
