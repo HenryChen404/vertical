@@ -43,6 +43,7 @@ export default function UpdateCrmReviewPage() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
   const pushDoneRef = useRef(false);
+  const sseRef = useRef<EventSource | null>(null);
 
   // Extract latest proposed_changes from messages
   const latestChanges = useMemo(() => {
@@ -69,6 +70,7 @@ export default function UpdateCrmReviewPage() {
     api.getWorkflowMessages(wfId).then(setMessages).catch(console.error);
 
     const es = api.streamWorkflow(wfId);
+    sseRef.current = es;
     es.onmessage = (event) => {
       try {
         const data: WorkflowStreamEvent = JSON.parse(event.data);
@@ -104,6 +106,9 @@ export default function UpdateCrmReviewPage() {
     if (!workflowId || isPushing) return;
     setIsPushing(true);
     pushDoneRef.current = false;
+    // Close SSE so it doesn't overwrite the local success/failure message
+    sseRef.current?.close();
+    sseRef.current = null;
     try {
       await api.confirmWorkflow(workflowId);
       const poll = setInterval(async () => {
