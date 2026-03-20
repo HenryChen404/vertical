@@ -42,6 +42,7 @@ export default function UpdateCrmReviewPage() {
   const [isPushing, setIsPushing] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
+  const pushDoneRef = useRef(false);
 
   // Extract latest proposed_changes from messages
   const latestChanges = useMemo(() => {
@@ -102,15 +103,18 @@ export default function UpdateCrmReviewPage() {
   const handleConfirm = async () => {
     if (!workflowId || isPushing) return;
     setIsPushing(true);
+    pushDoneRef.current = false;
     try {
       await api.confirmWorkflow(workflowId);
       const poll = setInterval(async () => {
+        if (pushDoneRef.current) return;
         const wf = await api.getWorkflow(workflowId);
         if (wf.state === WF.DONE) {
+          if (pushDoneRef.current) return;
+          pushDoneRef.current = true;
           clearInterval(poll);
           setIsPushing(false);
           setWorkflowState(WF.DONE);
-          // Add a success message to the chat
           setMessages((prev) => [
             ...prev,
             {
@@ -122,6 +126,8 @@ export default function UpdateCrmReviewPage() {
             },
           ]);
         } else if (wf.state === WF.FAILED) {
+          if (pushDoneRef.current) return;
+          pushDoneRef.current = true;
           clearInterval(poll);
           setIsPushing(false);
           setMessages((prev) => [
