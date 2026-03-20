@@ -1,6 +1,12 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+import logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+# Suppress noisy request logs
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from skills.sales_analyst import chat_review as _skill_chat_review
@@ -16,6 +17,11 @@ from services.workflow import WorkflowState, update_workflow_extractions, update
 logger = logging.getLogger(__name__)
 
 
+def _ms(t0: float) -> int:
+    """Elapsed milliseconds since t0."""
+    return int((time.time() - t0) * 1000)
+
+
 # --- Analyze ---
 
 
@@ -24,6 +30,7 @@ async def run_analysis(workflow_id: str) -> dict:
 
     Called when all transcriptions complete. Replaces the old run_extraction().
     """
+    t0 = time.time()
     db = get_supabase()
 
     # Collect transcripts
@@ -50,7 +57,9 @@ async def run_analysis(workflow_id: str) -> dict:
 
     # Run the sales analyst agent
     logger.info("Workflow %s: calling sales analyst agent...", workflow_id)
+    t_llm = time.time()
     result = await _skill_run_analysis(combined_text, crm_context)
+    llm_ms = _ms(t_llm)
     logger.info("Workflow %s: analysis complete — %d proposed changes",
                 workflow_id, len(result.proposed_changes))
 
@@ -74,6 +83,15 @@ async def run_analysis(workflow_id: str) -> dict:
         "recordings": recording_names,
     })
 
+    # Log timing
+    total_ms = _ms(t0)
+    logger.info(
+        "⏱ TIMING [analysis] workflow=%s total=%dms llm=%dms "
+        "transcript_chars=%d transcript_count=%d proposed_changes=%d",
+        workflow_id, total_ms, llm_ms, len(combined_text),
+        len(transcripts), len(result.proposed_changes),
+    )
+
     return extractions_data
 
 
@@ -82,6 +100,7 @@ async def run_analysis(workflow_id: str) -> dict:
 
 async def chat_review(workflow_id: str, user_message: str) -> dict:
     """Process a user chat message during review."""
+    t0 = time.time()
     db = get_supabase()
     wf_resp = (
         db.table("workflows")
@@ -110,7 +129,9 @@ async def chat_review(workflow_id: str, user_message: str) -> dict:
     combined_text = "\n\n---\n\n".join(t["transcript"] for t in tasks_resp.data)
 
     # Call the review agent
+    t_llm = time.time()
     response = await _skill_chat_review(llm_messages, proposed_changes, combined_text)
+    llm_ms = _ms(t_llm)
 
     # Persist updated state
     updated_extractions = {
@@ -130,6 +151,15 @@ async def chat_review(workflow_id: str, user_message: str) -> dict:
     msg_content["proposed_changes"] = response["proposed_changes"]
     add_message(workflow_id, MessageRole.ASSISTANT, msg_content)
 
+    # Log timing
+    total_ms = _ms(t0)
+    logger.info(
+        "⏱ TIMING [chat_review] workflow=%s total=%dms llm=%dms "
+        "message_count=%d should_push=%s",
+        workflow_id, total_ms, llm_ms,
+        len(llm_messages), response.get("should_push"),
+    )
+
     return {
         "extractions": updated_extractions,
         "messages": response["messages"],
@@ -142,6 +172,7 @@ async def chat_review(workflow_id: str, user_message: str) -> dict:
 
 async def push_to_crm(workflow_id: str) -> None:
     """Push approved proposed changes to Salesforce."""
+    t0 = time.time()
     update_workflow_state(workflow_id, WorkflowState.PUSHING)
 
     db = get_supabase()
@@ -162,7 +193,9 @@ async def push_to_crm(workflow_id: str) -> None:
         return
 
     try:
+        t_push = time.time()
         results = await _push_changes(proposed_changes, user_id)
+        push_api_ms = _ms(t_push)
 
         successes = [r for r in results if r["success"]]
         failures = [r for r in results if not r["success"]]
@@ -188,8 +221,20 @@ async def push_to_crm(workflow_id: str) -> None:
                 db.table("recordings").update({"crm_sync_status": 2}).in_("id", rec_ids).execute()
                 logger.info("Marked %d recordings as synced", len(rec_ids))
 
+        # Log timing
+        total_ms = _ms(t0)
+        approved_count = sum(1 for c in proposed_changes if c.get("approved"))
+        logger.info(
+            "⏱ TIMING [push] workflow=%s total=%dms api=%dms "
+            "approved=%d ok=%d fail=%d",
+            workflow_id, total_ms, push_api_ms,
+            approved_count, len(successes), len(failures),
+        )
+
     except Exception as e:
         logger.error("CRM push failed for workflow %s: %s", workflow_id, e)
+        logger.info("⏱ TIMING [push] workflow=%s total=%dms error=%s",
+                     workflow_id, _ms(t0), e)
         update_workflow_state(workflow_id, WorkflowState.FAILED)
 
 
