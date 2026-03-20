@@ -8,6 +8,7 @@ Tool slugs:
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,7 @@ async def push_changes(
             continue
 
         try:
+            t0 = time.time()
             if action == "update" and change.get("record_id"):
                 resp = client.tools.execute(
                     slug="SALESFORCE_SOBJECT_ROWS_UPDATE",
@@ -67,7 +69,9 @@ async def push_changes(
                     dangerously_skip_version_check=True,
                 )
                 _check_response(resp, f"Update {object_type} {change['record_id']}")
-                logger.info("Updated %s %s", object_type, change["record_id"])
+                ms = int((time.time() - t0) * 1000)
+                logger.info("⏱ TIMING [push_record] %s update %s %s — %dms",
+                            change_id, object_type, change["record_id"], ms)
                 results.append({"change_id": change_id, "success": True})
 
             elif action == "create":
@@ -82,7 +86,9 @@ async def push_changes(
                     dangerously_skip_version_check=True,
                 )
                 _check_response(resp, f"Create {object_type}")
-                logger.info("Created %s", object_type)
+                ms = int((time.time() - t0) * 1000)
+                logger.info("⏱ TIMING [push_record] %s create %s — %dms",
+                            change_id, object_type, ms)
                 results.append({"change_id": change_id, "success": True})
 
             else:

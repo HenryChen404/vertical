@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from typing import Any
 
 from google import genai
@@ -117,11 +118,15 @@ async def run_analysis(
             ),
         )
 
+    t0 = time.time()
+    logger.info("Analysis: calling Gemini (prompt ~%d chars, transcript ~%d chars)...",
+                len(system_prompt), len(user_content))
     response = await asyncio.to_thread(_call)
+    elapsed = time.time() - t0
     result = json.loads(response.text.strip())
     logger.info(
-        "Analysis completed: %d proposed changes",
-        len(result.get("proposed_changes", [])),
+        "Analysis completed in %.1fs: %d proposed changes, ~%d output chars",
+        elapsed, len(result.get("proposed_changes", [])), len(response.text),
     )
     return AnalysisResult(**result)
 
@@ -159,6 +164,8 @@ async def chat_review(
             )
         )
 
+    t0 = time.time()
+    logger.info("Chat review: calling Gemini (%d messages)...", len(messages))
     response = await asyncio.to_thread(
         client.models.generate_content,
         model=MODEL,
@@ -169,6 +176,8 @@ async def chat_review(
             temperature=0.3,
         ),
     )
+    elapsed = time.time() - t0
+    logger.info("Chat review completed in %.1fs", elapsed)
 
     assistant_text_parts = []
     for part in response.candidates[0].content.parts:
