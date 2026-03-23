@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import time
+import secrets
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -23,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 SESSION_MAX_AGE = 7 * 24 * 60 * 60  # 7 days in seconds
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3001")
+
+# In-memory store for one-time auth codes: code → (session_token, created_at)
+_pending_codes: dict[str, tuple[str, float]] = {}
 
 
 def _get_backend_callback_url(request: Request) -> str:
@@ -118,21 +123,62 @@ async def callback(
         logger.info("OAuth callback success: user_id=%s, name=%s", user_id, name)
 
         is_production = bool(os.getenv("BACKEND_URL"))
-        response = RedirectResponse(f"{FRONTEND_URL}/files?syncing=1", status_code=302)
-        response.set_cookie(
-            key="session",
-            value=session_token,
-            httponly=True,
-            samesite="none" if is_production else "lax",
-            secure=is_production,
-            max_age=SESSION_MAX_AGE,
-            path="/",
-        )
-        return response
+
+        if is_production:
+            # Production: front/back on different domains → one-time code exchange
+            auth_code = secrets.token_urlsafe(32)
+            _pending_codes[auth_code] = (session_token, time.time())
+            # Clean up expired codes (>60s)
+            now = time.time()
+            for k in [k for k, (_, t) in _pending_codes.items() if now - t > 60]:
+                _pending_codes.pop(k, None)
+            return RedirectResponse(
+                f"{FRONTEND_URL}/login/callback?auth_code={auth_code}",
+                status_code=302,
+            )
+        else:
+            # Local dev: same origin → set cookie directly
+            response = RedirectResponse(f"{FRONTEND_URL}/files?syncing=1", status_code=302)
+            response.set_cookie(
+                key="session",
+                value=session_token,
+                httponly=True,
+                samesite="lax",
+                secure=False,
+                max_age=SESSION_MAX_AGE,
+                path="/",
+            )
+            return response
 
     except Exception as e:
         logger.error("OAuth callback failed: %s", e, exc_info=True)
         return RedirectResponse(f"{FRONTEND_URL}/login?error=callback_failed")
+
+
+@router.post("/auth/exchange")
+async def exchange_auth_code(request: Request, response: Response):
+    """Exchange a one-time auth code for a session cookie.
+    Called by the frontend callback page after cross-domain OAuth redirect."""
+    body = await request.json()
+    auth_code = body.get("code")
+    if not auth_code or auth_code not in _pending_codes:
+        raise HTTPException(status_code=400, detail="Invalid or expired auth code")
+
+    session_token, created_at = _pending_codes.pop(auth_code)
+
+    if time.time() - created_at > 60:
+        raise HTTPException(status_code=400, detail="Auth code expired")
+
+    response.set_cookie(
+        key="session",
+        value=session_token,
+        httponly=True,
+        samesite="none",
+        secure=True,
+        max_age=SESSION_MAX_AGE,
+        path="/",
+    )
+    return {"success": True}
 
 
 @router.post("/auth/logout")
