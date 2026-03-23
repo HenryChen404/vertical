@@ -118,17 +118,27 @@ async def callback(
         logger.info("OAuth callback success: user_id=%s, name=%s", user_id, name)
 
         is_production = bool(os.getenv("BACKEND_URL"))
-        response = RedirectResponse(f"{FRONTEND_URL}/files?syncing=1", status_code=302)
-        response.set_cookie(
-            key="session",
-            value=session_token,
-            httponly=True,
-            samesite="none" if is_production else "lax",
-            secure=is_production,
-            max_age=SESSION_MAX_AGE,
-            path="/",
-        )
-        return response
+
+        if is_production:
+            # Production: redirect to frontend callback with token in URL.
+            # Frontend sets cookie on its own domain via Next.js API route.
+            return RedirectResponse(
+                f"{FRONTEND_URL}/login/callback?token={session_token}",
+                status_code=302,
+            )
+        else:
+            # Local dev: same origin, set cookie directly
+            response = RedirectResponse(f"{FRONTEND_URL}/files?syncing=1", status_code=302)
+            response.set_cookie(
+                key="session",
+                value=session_token,
+                httponly=True,
+                samesite="lax",
+                secure=False,
+                max_age=SESSION_MAX_AGE,
+                path="/",
+            )
+            return response
 
     except Exception as e:
         logger.error("OAuth callback failed: %s", e, exc_info=True)
