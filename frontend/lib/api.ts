@@ -117,18 +117,21 @@ export const api = {
     const url = `${API_BASE}/api/workflows/${id}/stream`;
     return new EventSource(url, { withCredentials: true });
   },
-  chatWorkflow: (id: string, message: string) =>
-    fetchApi<{ extractions: { proposed_changes?: import("./types").ProposedChange[]; summary?: string }; messages: unknown[]; should_push: boolean }>(
+  chatWorkflow: (id: string, message: string, recordingId?: string) =>
+    fetchApi<{ extractions: { proposed_changes?: import("./types").ProposedChange[]; recordings?: import("./types").RecordingExtraction[]; summary?: string }; messages: unknown[]; should_push: boolean }>(
       `/api/workflows/${id}/chat`,
-      { method: "POST", body: JSON.stringify({ message }) },
+      { method: "POST", body: JSON.stringify({ message, ...(recordingId ? { recording_id: recordingId } : {}) }) },
     ),
   updateProposedChanges: (id: string, proposedChanges: import("./types").ProposedChange[]) =>
     fetchApi<unknown>(`/api/workflows/${id}/extractions`, {
       method: "PUT",
       body: JSON.stringify({ extractions: { proposed_changes: proposedChanges } }),
     }),
-  confirmWorkflow: (id: string) =>
-    fetchApi<{ status: string }>(`/api/workflows/${id}/confirm`, { method: "POST" }),
+  confirmWorkflow: (id: string, recordingId?: string) =>
+    fetchApi<{ status: string }>(`/api/workflows/${id}/confirm`, {
+      method: "POST",
+      body: recordingId ? JSON.stringify({ recording_id: recordingId }) : undefined,
+    }),
   transcribeVoice: async (audioBlob: Blob): Promise<string> => {
     const res = await fetch(`${API_BASE}/api/workflows/transcribe-voice`, {
       method: "POST",

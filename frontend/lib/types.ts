@@ -199,6 +199,13 @@ export interface ProposedChange {
   approved: boolean;
 }
 
+export interface RecordingExtraction {
+  recording_id: string;
+  name: string;
+  proposed_changes: ProposedChange[];
+  summary?: string;
+}
+
 // Workflow states: 0=CREATED, 1=TRANSCRIBING, 2=ANALYZING, 3=REVIEW, 4=PUSHING, 5=DONE, 6=FAILED
 export interface WorkflowTask {
   id: string;
@@ -217,6 +224,7 @@ export interface Workflow {
   extractions?: {
     proposed_changes?: ProposedChange[];
     summary?: string;
+    recordings?: RecordingExtraction[];
   };
   tasks?: WorkflowTask[];
 }
@@ -231,6 +239,7 @@ export interface WorkflowStreamEvent {
   extractions?: {
     proposed_changes?: ProposedChange[];
     summary?: string;
+    recordings?: RecordingExtraction[];
   };
 }
 

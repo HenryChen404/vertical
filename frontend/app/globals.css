@@ -124,3 +124,17 @@
     transform: translateY(-10px);
   }
 }
+
+@keyframes shimmer-text {
+  0% {
+    background-position: 100% center;
+  }
+  100% {
+    background-position: -100% center;
+  }
+}
+
+.animate-shimmer-text {
+  animation: shimmer-text 1.8s linear infinite;
+  background-size: 200% 100%;
+}
