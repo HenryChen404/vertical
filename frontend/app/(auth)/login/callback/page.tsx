@@ -3,47 +3,40 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-
 function CallbackContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const authCode = searchParams.get("auth_code");
+    const token = searchParams.get("token");
 
-    if (!authCode) {
-      // No auth code — either old flow or direct visit, just go to /files
+    if (!token) {
+      // No token — either old flow or direct visit
       router.replace("/files");
       return;
     }
 
-    // Exchange the one-time code for a session cookie
-    async function exchangeCode() {
+    // Set session cookie on the frontend domain via Next.js API route
+    async function setSession() {
       try {
-        const res = await fetch(`${API_BASE}/api/auth/exchange`, {
+        const res = await fetch("/api/auth/set-session", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({ code: authCode }),
+          body: JSON.stringify({ token }),
         });
 
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.detail || "Exchange failed");
-        }
+        if (!res.ok) throw new Error("Failed to set session");
 
-        // Cookie is now set on the backend domain — redirect to /files
         router.replace("/files?syncing=1");
       } catch (e: any) {
-        console.error("Auth code exchange failed:", e);
+        console.error("Set session failed:", e);
         setError(e.message || "Authentication failed");
         setTimeout(() => router.replace("/login"), 2000);
       }
     }
 
-    exchangeCode();
+    setSession();
   }, [searchParams, router]);
 
   return (
