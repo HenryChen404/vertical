@@ -7,7 +7,7 @@ import json
 import logging
 import os
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -45,6 +45,7 @@ class CreateWorkflowRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    recording_id: str | None = None  # scope chat to a specific recording's changes
 
 
 class UpdateExtractionsRequest(BaseModel):
@@ -129,6 +130,7 @@ async def stream_workflow_endpoint(
         prev_state = None
         prev_task_states: dict[str, int] = {}
         prev_analysis_progress = None
+        prev_push_progress = None
 
         while True:
             workflow = get_workflow(workflow_id)
@@ -145,15 +147,17 @@ async def stream_workflow_endpoint(
             failed = sum(1 for t in tasks if t["state"] == TaskState.FAILED)
             task_states = {t["id"]: t["state"] for t in tasks}
 
-            # Track analysis progress changes
+            # Track analysis and push progress changes
             extractions = workflow.get("extractions") or {}
             analysis_progress = extractions.get("_analysis_progress")
+            push_progress = extractions.get("_push_progress")
 
-            # Emit on state change, task progress change, or analysis progress change
+            # Emit on state change, task progress change, or progress change
             has_change = (
                 current_state != prev_state
                 or task_states != prev_task_states
                 or analysis_progress != prev_analysis_progress
+                or push_progress != prev_push_progress
             )
             if has_change:
                 event = {
@@ -171,20 +175,39 @@ async def stream_workflow_endpoint(
                     ac = progress.get("completed", 0)
                     at = progress.get("total", 0)
                     phase = progress.get("phase", "analyzing")
+                    rec_index = progress.get("recording_index", 0)
+                    rec_total = progress.get("recording_total", 1)
+                    rec_name = progress.get("recording_name", "")
                     if phase == "summarizing":
-                        event["message"] = "Preparing summary..."
-                    elif at > 0:
-                        event["message"] = "Analyzing meeting data..."
+                        if rec_total > 1:
+                            event["message"] = f"Preparing summary ({rec_index + 1}/{rec_total})..."
+                        else:
+                            event["message"] = "Preparing summary..."
+                    elif rec_total > 1:
+                        event["message"] = f"Analyzing recording {rec_index + 1}/{rec_total}..."
                     else:
                         event["message"] = "Analyzing meeting data..."
                     if at > 0:
-                        event["analysis_progress"] = {"completed": ac, "total": at}
+                        event["analysis_progress"] = {
+                            "completed": ac,
+                            "total": at,
+                            "recording_index": rec_index,
+                            "recording_total": rec_total,
+                        }
                     event["extractions"] = extractions
                 elif current_state == WorkflowState.REVIEW:
                     event["message"] = "Ready for review"
                     event["extractions"] = workflow.get("extractions", {})
                 elif current_state == WorkflowState.PUSHING:
-                    event["message"] = "Pushing to CRM..."
+                    push_progress = extractions.get("_push_progress", {})
+                    pc = push_progress.get("completed", 0)
+                    pt = push_progress.get("total", 0)
+                    if pt > 0:
+                        pct = min(99, int((pc / pt) * 100))
+                        event["message"] = f"Pushing to CRM... ({pc}/{pt})"
+                        event["push_progress"] = {"completed": pc, "total": pt, "percent": pct}
+                    else:
+                        event["message"] = "Pushing to CRM..."
                 elif current_state == WorkflowState.DONE:
                     event["message"] = "CRM update complete"
                     yield f"data: {json.dumps(event)}\n\n"
@@ -198,8 +221,9 @@ async def stream_workflow_endpoint(
                 prev_state = current_state
                 prev_task_states = task_states
                 prev_analysis_progress = analysis_progress
+                prev_push_progress = push_progress
 
-            await asyncio.sleep(2)
+            await asyncio.sleep(1)
 
     return StreamingResponse(
         event_generator(),
@@ -215,14 +239,17 @@ async def chat_endpoint(
     request: Request,
     user: dict = Depends(get_current_user),
 ):
-    """Chat with Gemini to review/modify extractions."""
+    """Chat with Gemini to review/modify extractions.
+
+    Optionally scope to a specific recording via recording_id.
+    """
     workflow = get_workflow(workflow_id)
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
     if workflow["state"] != WorkflowState.REVIEW:
         raise HTTPException(status_code=400, detail="Workflow not in review state")
 
-    result = await chat_review(workflow_id, req.message)
+    result = await chat_review(workflow_id, req.message, recording_id=req.recording_id)
 
     return {
         "extractions": result.get("extractions", {}),
@@ -255,16 +282,21 @@ async def confirm_endpoint(
     background_tasks: BackgroundTasks,
     request: Request,
     user: dict = Depends(get_current_user),
+    recording_id: str | None = Body(default=None, embed=True),
 ):
-    """Confirm and push extractions to CRM."""
+    """Confirm and push extractions to CRM.
+
+    Optionally push only a specific recording's changes via recording_id in body.
+    Sending an empty body or {} pushes all recordings.
+    """
     workflow = get_workflow(workflow_id)
     if not workflow:
         raise HTTPException(status_code=404, detail="Workflow not found")
     if workflow["state"] not in (WorkflowState.REVIEW, WorkflowState.FAILED):
         raise HTTPException(status_code=400, detail="Workflow not in review or failed state")
 
-    background_tasks.add_task(push_to_crm, workflow_id)
-    return {"status": "pushing"}
+    background_tasks.add_task(push_to_crm, workflow_id, recording_id)
+    return {"status": "pushing", "recording_id": recording_id}
 
 
 # --- Background task helpers ---

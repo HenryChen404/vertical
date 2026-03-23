@@ -57,6 +57,30 @@ async def push_changes(
     return list(await asyncio.gather(*tasks))
 
 
+async def push_one_change(
+    change: dict,
+    user_id: str | None = None,
+) -> dict[str, Any]:
+    """Push a single approved change to Salesforce."""
+    from adapters.salesforce import SalesforceAdapter
+
+    if not change.get("approved"):
+        return {"change_id": change["id"], "success": True, "error": "Skipped (not approved)"}
+
+    fields = {diff["field"]: diff["new"] for diff in change.get("changes", [])}
+    if not fields:
+        return {"change_id": change["id"], "success": True}
+
+    adapter = SalesforceAdapter()
+    uid = user_id or adapter._current_user_id
+    client, account = adapter._get_client_and_account(uid)
+
+    if not client or not account:
+        return {"change_id": change["id"], "success": False, "error": "No Salesforce connection"}
+
+    return await _push_one(client, account, uid, change, fields)
+
+
 async def _push_one(
     client: Any,
     account: Any,
